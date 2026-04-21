@@ -17,6 +17,8 @@ from `transformers`.
 | Qwen3 (0.6B) | `hf_qwen3.py` | Compiles and runs on Spyre |
 | Granite 4.0 (1B dense) | `hf_granitemoehybrid.py` | Compiles and runs on Spyre |
 | SmolLM3 (3B) | `hf_smollm3.py` | Compiles and runs on Spyre |
+| Llama 3.2 (3B) | `hf_llama.py` | Compiles and runs on Spyre |
+| TinyLlama (1.1B) | `hf_llama.py` | Compiles and runs on Spyre (head-dim padded) |
 | Phi-4 mini | `hf_phi3.py` | Blocked on Spyre (sub-stick `head_dim`) |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full compatibility
@@ -36,7 +38,7 @@ print(outputs[0])
 ```
 
 Replace `hf_granite` with `hf_qwen3`, `hf_granitemoehybrid`, `hf_smollm3`,
-or `hf_phi3` for other model families.
+`hf_llama`, or `hf_phi3` for other model families.
 
 ## Repo Structure
 
@@ -53,6 +55,7 @@ hf_adapters/
 ├── hf_qwen3.py                Qwen3 adapter
 ├── hf_granitemoehybrid.py     Granite 4.0 dense adapter
 ├── hf_smollm3.py              SmolLM3 adapter
+├── hf_llama.py                Llama adapter (Llama 1/2/3, Code Llama, Yi, TinyLlama)
 ├── hf_phi3.py                 Phi-4 mini adapter
 └── __init__.py
 
@@ -93,6 +96,7 @@ python tests/test_adapter_cpu_accuracy.py qwen3
 python tests/test_adapter_cpu_accuracy.py granite
 python tests/test_adapter_cpu_accuracy.py granite4
 python tests/test_adapter_cpu_accuracy.py smollm3
+python tests/test_adapter_cpu_accuracy.py llama
 ```
 
 This downloads model weights from HuggingFace Hub on first run. The test
@@ -118,6 +122,7 @@ python tests/test_block_cpu_vs_spyre.py qwen3
 python tests/test_block_cpu_vs_spyre.py granite
 python tests/test_block_cpu_vs_spyre.py granite4
 python tests/test_block_cpu_vs_spyre.py smollm3
+python tests/test_block_cpu_vs_spyre.py llama
 ```
 
 **E2E smoke test** — loads a real model onto Spyre, generates tokens,
@@ -128,6 +133,7 @@ python tests/test_e2e_smoke_spyre.py qwen3
 python tests/test_e2e_smoke_spyre.py granite
 python tests/test_e2e_smoke_spyre.py granite4
 python tests/test_e2e_smoke_spyre.py smollm3
+python tests/test_e2e_smoke_spyre.py llama
 ```
 
 **E2E token comparison** — runs stock HF on CPU and the adapter on Spyre
@@ -136,6 +142,7 @@ side-by-side, comparing greedy tokens at each step:
 ```bash
 python tests/test_e2e_token_compare_spyre.py qwen3
 python tests/test_e2e_token_compare_spyre.py granite
+python tests/test_e2e_token_compare_spyre.py llama
 ```
 
 Note: Spyre has known numerical accuracy limitations being addressed in

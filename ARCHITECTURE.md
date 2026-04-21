@@ -98,6 +98,7 @@ hf_adapters/
 ├── hf_qwen3.py            — Qwen3 adapter
 ├── hf_granitemoehybrid.py — Granite 4.0 dense adapter
 ├── hf_smollm3.py          — SmolLM3 adapter
+├── hf_llama.py            — Llama adapter (Llama 1/2/3, Code Llama, Yi, TinyLlama)
 ├── hf_phi3.py             — Phi-4 mini adapter (sub-stick blocked)
 └── __init__.py
 ```
@@ -347,8 +348,8 @@ expr d4 in [0, d0, 64*d1 + 32*d3 + d4]
 frequencies to the required size.
 
 Granite 3.3 2B (`head_dim=64`) is padded to 128 automatically.
-Phi-4 mini (`head_dim=96`) could use the same approach but is
-untested.
+Phi-4 mini has `head_dim=128` (`D/2=64`, exactly one stick) so no
+padding is needed.
 
 Note that `head_dim` is not always
 `hidden_size // num_attention_heads`. Some models (e.g. Qwen3)
