@@ -10,21 +10,12 @@ from `transformers`.
 
 ## Supported Models
 
-| Model | Adapter | Status |
-|-------|---------|--------|
-| Granite 3.3 (8B) | `hf_granite.py` | Compiles and runs on Spyre |
-| Granite 3.3 (2B) | `hf_granite.py` | Compiles and runs on Spyre (head-dim padded) |
-| Qwen3 (0.6B) | `hf_qwen3.py` | Compiles and runs on Spyre |
-| Granite 4.0 (1B dense) | `hf_granitemoehybrid.py` | Compiles and runs on Spyre |
-| SmolLM3 (3B) | `hf_smollm3.py` | Compiles and runs on Spyre |
-| Llama 3.2 (3B) | `hf_llama.py` | Compiles and runs on Spyre |
-| TinyLlama (1.1B) | `hf_llama.py` | Compiles and runs on Spyre (head-dim padded) |
-| Qwen2.5 (0.5B-7B) | `hf_qwen2.py` | Compiles and runs on Spyre |
-| Mistral 7B (v0.2, v0.3) | `hf_mistral.py` | Compiles and runs on Spyre |
-| Phi-4 mini | `hf_phi3.py` | Blocked on Spyre (sub-stick `head_dim`) |
+8 adapters covering 11 models (Granite, Qwen3, Qwen2, SmolLM3, Llama,
+Mistral, Phi-4). All compile and run on Spyre.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full compatibility
-matrix, architecture details, and known issues.
+See [ARCHITECTURE.md](ARCHITECTURE.md#model-compatibility-matrix) for
+the full compatibility matrix with head\_dim, stick alignment, and test
+status.
 
 ## Quick Start
 
@@ -80,86 +71,45 @@ tests/
 
 ## Running Tests
 
-There are two classes of tests: **CPU-only** tests that verify the
-adapter produces identical results to stock HuggingFace on CPU, and
-**Spyre** tests that run on Spyre hardware.
+Two classes: **CPU-only** (adapter vs stock HF on CPU) and **Spyre**
+(requires Spyre hardware + `torch_spyre`).
+
+Every test script accepts model aliases as arguments. Run with no args
+to test all models.
 
 ### CPU Tests (no Spyre required)
 
-These compare the adapter's patched forward pass against stock HF
-`transformers` on CPU. Both use the same weights — the test runs stock
-HF first, then applies the adapter patches and reruns. Greedy tokens
-must match at every step.
+Compares adapter's patched forward pass against stock HF on CPU.
+Greedy tokens must match at every step. Downloads weights on first run.
 
 ```bash
-# Run all supported models
-python tests/test_adapter_cpu_accuracy.py
-
-# Run a specific model
-python tests/test_adapter_cpu_accuracy.py qwen3
-python tests/test_adapter_cpu_accuracy.py granite
-python tests/test_adapter_cpu_accuracy.py granite4
-python tests/test_adapter_cpu_accuracy.py smollm3
-python tests/test_adapter_cpu_accuracy.py llama
-python tests/test_adapter_cpu_accuracy.py qwen2
-python tests/test_adapter_cpu_accuracy.py mistral
+python tests/test_adapter_cpu_accuracy.py            # all models
+python tests/test_adapter_cpu_accuracy.py granite     # one model
 ```
-
-This downloads model weights from HuggingFace Hub on first run. The test
-runs prefill + 4 greedy decode steps and compares logits and top-1 token
-selections between stock HF and the adapter. All top-1 tokens should
-match (PASS).
 
 ### Spyre Tests (requires Spyre hardware)
 
-These must be run on a machine with Spyre accelerators and `torch_spyre`
-installed.
-
-**Per-layer block comparison** — creates tiny random-weight models (no
-download), runs each decoder block on CPU (uncompiled) and Spyre
-(compiled), compares hidden state outputs numerically:
+**Per-layer block comparison** (random weights, no download):
 
 ```bash
-# Run all models
 python tests/test_block_cpu_vs_spyre.py all
-
-# Run a specific model
-python tests/test_block_cpu_vs_spyre.py qwen3
 python tests/test_block_cpu_vs_spyre.py granite
-python tests/test_block_cpu_vs_spyre.py granite4
-python tests/test_block_cpu_vs_spyre.py smollm3
-python tests/test_block_cpu_vs_spyre.py llama
-python tests/test_block_cpu_vs_spyre.py qwen2
-python tests/test_block_cpu_vs_spyre.py mistral
 ```
 
-**E2E smoke test** — loads a real model onto Spyre, generates tokens,
-verifies non-trivial output:
+**E2E smoke test** (real weights, verify non-trivial output):
 
 ```bash
-python tests/test_e2e_smoke_spyre.py qwen3
 python tests/test_e2e_smoke_spyre.py granite
-python tests/test_e2e_smoke_spyre.py granite4
-python tests/test_e2e_smoke_spyre.py smollm3
-python tests/test_e2e_smoke_spyre.py llama
-python tests/test_e2e_smoke_spyre.py qwen2
-python tests/test_e2e_smoke_spyre.py mistral
 ```
 
-**E2E token comparison** — runs stock HF on CPU and the adapter on Spyre
-side-by-side, comparing greedy tokens at each step:
+**E2E token comparison** (HF CPU vs adapter Spyre, greedy tokens):
 
 ```bash
-python tests/test_e2e_token_compare_spyre.py qwen3
 python tests/test_e2e_token_compare_spyre.py granite
-python tests/test_e2e_token_compare_spyre.py llama
-python tests/test_e2e_token_compare_spyre.py qwen2
-python tests/test_e2e_token_compare_spyre.py mistral
 ```
 
-Note: Spyre has known numerical accuracy limitations being addressed in
-hardware. Token mismatches between CPU and Spyre are expected until those
-fixes land.
+Note: Spyre has known numerical accuracy limitations. Token mismatches
+between CPU and Spyre are expected until torch\_spyre fixes land.
 
 ## License
 
