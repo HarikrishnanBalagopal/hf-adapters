@@ -21,6 +21,10 @@ class ModelDataViewer:
         self.columns: List[str] = []
         self.filters: Dict[str, List[str]] = {}
         self.unique_values: Dict[str, Set[str]] = {}
+        # Numeric range filter on `parameters` column, in raw param count.
+        # None means unbounded on that side.
+        self.params_min: float | None = None
+        self.params_max: float | None = 20e9
 
     def load_data(self) -> bool:
         """Load data from CSV file."""
@@ -59,6 +63,20 @@ class ModelDataViewer:
                     if str(row.get(column, "")) in selected_values
                 ]
 
+        if self.params_min is not None or self.params_max is not None:
+            lo = self.params_min if self.params_min is not None else float("-inf")
+            hi = self.params_max if self.params_max is not None else float("inf")
+            kept = []
+            for row in self.filtered_data:
+                raw = row.get("parameters", "")
+                try:
+                    n = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if lo <= n <= hi:
+                    kept.append(row)
+            self.filtered_data = kept
+
     def get_coverage_stats(self) -> Dict[str, Any]:
         """Calculate coverage statistics for supported models."""
         total = len(self.filtered_data)
@@ -94,6 +112,8 @@ viewer = ModelDataViewer("top_generative_models.csv")
 
 # Global UI state
 ui_state = {"content_container": None, "stats_cards": {}, "filter_selects": {}}
+
+_UNSET = object()
 
 
 def create_stats_card(stats: Dict[str, Any]):
@@ -311,8 +331,8 @@ def refresh_display():
             create_stats_card(stats)
 
             # Model type distribution
-            type_stats = viewer.get_model_type_stats()
-            create_model_type_chart(type_stats)
+            # type_stats = viewer.get_model_type_stats()
+            # create_model_type_chart(type_stats)
 
             # Data table
             with ui.card().classes("w-full"):
@@ -364,6 +384,26 @@ def create_filter_panel():
                         on_change=lambda e, f=field: update_filter(f, e.value),
                     ).classes("flex-1 min-w-[200px]").props("use-chips")
 
+            # Numeric range filter on parameters (in billions, B)
+            with ui.row().classes("items-center gap-2 min-w-[260px]"):
+                ui.label("Params (B):").classes("text-sm font-semibold")
+                ui.number(
+                    label="Min",
+                    value=None,
+                    min=0,
+                    step=0.1,
+                    format="%.2f",
+                    on_change=lambda e: update_params_range(e.value, _UNSET),
+                ).classes("w-28").props("clearable")
+                ui.number(
+                    label="Max",
+                    value=20,
+                    min=0,
+                    step=0.1,
+                    format="%.2f",
+                    on_change=lambda e: update_params_range(_UNSET, e.value),
+                ).classes("w-28").props("clearable")
+
         with ui.row().classes("gap-2 mt-2"):
             ui.button("Clear All Filters", on_click=clear_filters).props(
                 "color=secondary"
@@ -376,9 +416,21 @@ def update_filter(field: str, value: List[str]):
     refresh_display()
 
 
+def update_params_range(min_b: Any, max_b: Any):
+    """Update the params range filter.
+    Pass the sentinel `_UNSET` for the side you don't want to change."""
+    if min_b is not _UNSET:
+        viewer.params_min = float(min_b) * 1e9 if min_b not in (None, "") else None
+    if max_b is not _UNSET:
+        viewer.params_max = float(max_b) * 1e9 if max_b not in (None, "") else None
+    refresh_display()
+
+
 def clear_filters():
     """Clear all filters and refresh."""
     viewer.filters.clear()
+    viewer.params_min = None
+    viewer.params_max = None
     refresh_display()
 
 
