@@ -4,11 +4,43 @@ Interactive UI for viewing and filtering top generative models data.
 Displays CSV data with elegant filtering and coverage statistics.
 """
 
+import ast
 import csv
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from nicegui import ui
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ADAPTERS_DIR = PROJECT_ROOT / "hf_adapters"
+AUTO_SPYRE_PATH = ADAPTERS_DIR / "auto_spyre_model.py"
+
+
+def _parse_config_to_module_map() -> Dict[str, str]:
+    """Parse CONFIG_TO_ADAPTER_MODULE_MAPPING
+    from auto_spyre_model.py without importing it.
+    Returns {config_class_name: adapter_module_name}, e.g. {"Qwen3Config": "hf_qwen3"}.
+    """
+    try:
+        tree = ast.parse(AUTO_SPYRE_PATH.read_text())
+    except (OSError, SyntaxError):
+        return {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if "CONFIG_TO_ADAPTER_MODULE_MAPPING" in targets and isinstance(
+                node.value, ast.Dict
+            ):
+                result = {}
+                for k, v in zip(node.value.keys, node.value.values):
+                    if isinstance(k, ast.Name) and isinstance(v, ast.Name):
+                        result[k.id] = v.id
+                return result
+    return {}
+
+
+CONFIG_CLASS_TO_MODULE = _parse_config_to_module_map()
 
 
 class ModelDataViewer:
@@ -297,6 +329,11 @@ def create_data_table(data: List[Dict[str, Any]], columns: List[str]):
                 formatted_row[col] = "🔒" if value.lower() == "true" else "🆓"
             else:
                 formatted_row[col] = value
+        # Attach adapter module name when the config_class is supported,
+        # so the table slot can render it as a link.
+        formatted_row["config_class_module"] = CONFIG_CLASS_TO_MODULE.get(
+            row.get("config_class", ""), ""
+        )
         rows.append(formatted_row)
 
     table = ui.table(
@@ -313,6 +350,21 @@ def create_data_table(data: List[Dict[str, Any]], columns: List[str]):
             <q-badge :color="props.value === '✅' ? 'green' : 'red'">
                 {{ props.value }}
             </q-badge>
+        </q-td>
+    """,
+    )
+
+    table.add_slot(
+        "body-cell-config_class",
+        """
+        <q-td :props="props">
+            <a v-if="props.row.config_class_module"
+               :href="'/adapter/' + props.row.config_class_module"
+               target="_blank"
+               class="text-blue-600 underline">
+                {{ props.value }}
+            </a>
+            <span v-else>{{ props.value }}</span>
         </q-td>
     """,
     )
@@ -436,6 +488,21 @@ def clear_filters():
 
 
 # Main UI
+@ui.page("/adapter/{module_name}")
+def adapter_source_page(module_name: str):
+    """Display the source of a Spyre adapter module."""
+    if module_name not in CONFIG_CLASS_TO_MODULE.values():
+        ui.label(f"Unknown adapter module: {module_name}").classes("text-red-600 p-4")
+        return
+    path = ADAPTERS_DIR / f"{module_name}.py"
+    if not path.exists():
+        ui.label(f"File not found: {path}").classes("text-red-600 p-4")
+        return
+    source = path.read_text()
+    ui.label(f"📄 hf_adapters/{module_name}.py").classes("text-2xl font-bold p-4")
+    ui.code(source, language="python").classes("w-full")
+
+
 @ui.page("/")
 def main_page():
     """Main page of the application."""
