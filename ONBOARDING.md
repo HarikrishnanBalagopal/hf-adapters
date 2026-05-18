@@ -3,6 +3,21 @@
 Step-by-step guide for adding a HuggingFace Transformers model to the
 Spyre adapter framework.
 
+## Quick Start (with Claude Code)
+
+In practice, Claude handles the adapter implementation. Your workflow:
+
+1. Identify the model and HuggingFace checkpoint path
+2. Ask Claude to onboard it (e.g., "onboard Qwen2.5 using the
+   qwen2 adapter" or "add an adapter for org/model-1b")
+3. Review the adapter code and test results Claude produces
+4. Run Spyre tests on the pod (Claude can drive this too if
+   connected, or you run manually)
+
+The detailed steps below describe what Claude does under the hood —
+useful for reviewing its output, debugging failures, or onboarding
+a model manually.
+
 ## Prerequisites
 
 - Python environment with `pip install -e .` (editable install)
