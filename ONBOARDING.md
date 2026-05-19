@@ -8,11 +8,33 @@ Spyre adapter framework.
 In practice, Claude handles the adapter implementation. Your workflow:
 
 1. Identify the model and HuggingFace checkpoint path
-2. Ask Claude to onboard it (e.g., "onboard Qwen2.5 using the
+2. Check if `type(model.config)` already exists in
+   `CONFIG_TO_ADAPTER_MODULE_MAPPING` in `hf_adapters/auto_spyre_model.py`.
+   If it does, the adapter already exists — skip to Step 5 (register in tests)
+3. Ask Claude to onboard it (e.g., "onboard Qwen2.5 using the
    qwen2 adapter" or "add an adapter for org/model-1b")
-3. Review the adapter code and test results Claude produces
-4. Run Spyre tests on the pod (Claude can drive this too if
+4. Review the adapter code and test results Claude produces
+5. Run Spyre tests on the pod (Claude can drive this too if
    connected, or you run manually)
+
+**Optional MCP servers** for enhanced onboarding (add to `~/.claude.json`):
+
+```json
+"mcpServers": {
+  "web-search": {
+    "type": "http",
+    "url": "https://mcp.ete-server.vpc-int.res.ibm.com/mcp"
+  },
+  "spyre-kb": {
+    "type": "stdio",
+    "command": "<path-to>/spyre-knowledgebase/scripts/run-mcp-server",
+    "args": [],
+    "env": {
+      "GITWIKI_ROOT": "<path-to>/spyre-knowledgebase/"
+    }
+  }
+}
+```
 
 The detailed steps below describe what Claude does under the hood —
 useful for reviewing its output, debugging failures, or onboarding
@@ -27,7 +49,14 @@ a model manually.
 
 ## Step 1: Check Architecture Constraints
 
-Before writing any code, verify the model is compatible:
+Before writing any code, verify the model is compatible. Currently
+supported: **dense, decoder-only, autoregressive** models with RoPE
+(full or partial) or absolute position encoding.
+
+Not compatible:
+- MoE with dynamic routing (Mixtral, DBRX) — note: Granite 4.0 with `num_local_experts=1` is fine
+- Encoder-decoder (T5, BART)
+- Models requiring custom CUDA kernels with no PyTorch fallback
 
 ```python
 from transformers import AutoConfig
@@ -41,7 +70,7 @@ print(f"head_dim={head_dim}, head_dim/2={head_dim // 2}")
 
 | Check | Condition | Action |
 |-------|-----------|--------|
-| Stick alignment | `head_dim / 2 < 64` | Use `pad_attention_heads()` to pad to 128 |
+| Stick alignment | `head_dim / 2 < 64` | Use `pad_attention_heads()` — handled automatically by `prepare_rope_and_heads()` |
 | Fused QKV | Single `qkv_proj` weight | Split into separate `q_proj`, `k_proj`, `v_proj` at prepare time |
 | Fused MLP | Single `gate_up_proj` weight | Split into separate `gate_proj`, `up_proj` at prepare time |
 | Partial RoPE | `partial_rotary_factor < 1.0` | Use `PartialPrecomputedRotaryEmbedding` (see `hf_phi3.py`) |
@@ -58,28 +87,48 @@ Most models fall into one of two categories:
 
 If the model has: separate Q/K/V projections, pre-norm (RMSNorm before
 attention/MLP), standard SwiGLU MLP, no multipliers — use the shared
-helpers:
+helpers. The adapter becomes trivial:
 
 ```python
 from hf_adapters.hf_common import (
-    make_standard_gqa_block,
-    standard_gqa_forward,
     prepare_standard_gqa,
+    standard_gqa_backbone_forward,
+    standard_gqa_forward,
 )
+
+_run_forward = standard_gqa_forward
+_run_backbone_forward = standard_gqa_backbone_forward
+
+
+def prepare_for_spyre(model):
+    from transformers.models.mymodel.modeling_mymodel import MyModelRMSNorm
+    prepare_standard_gqa(model, MyModelRMSNorm)
 ```
 
-Examples: `hf_llama.py`, `hf_qwen2.py`, `hf_mistral.py`
+That's the entire adapter — see `hf_llama.py`, `hf_qwen2.py`, `hf_mistral.py`
+for real examples.
 
 ### Custom block (complex path)
 
 If the model has multipliers, unusual norms, fused weights, or other
-quirks — write a custom `_make_compiled_block()` and `_run_forward()`.
+quirks — write custom `_make_compiled_block()`, `_run_forward()`,
+`_run_backbone_forward()`, and `prepare_for_spyre()`.
 
 Examples: `hf_granite.py`, `hf_phi3.py`, `hf_olmo2.py`
 
 ## Step 3: Create the Adapter File
 
-Create `hf_adapters/hf_<model>.py` with these four functions:
+Create `hf_adapters/hf_<model>.py`. Every adapter must expose:
+
+| Export | Purpose |
+|--------|---------|
+| `_run_forward(model, input_ids, position_ids, attn_mask, key_caches, value_caches, is_filling, token_index, cache_position)` | Full forward → logits |
+| `_run_backbone_forward(...)` | Same signature → last hidden state (no lm_head). Used by embedding callers |
+| `prepare_for_spyre(model)` | Patch model in-place for Spyre |
+
+For **standard GQA** adapters these are just assignments (see Step 2).
+
+For **custom** adapters you also write:
 
 ### `_make_compiled_block(layer)`
 
@@ -101,24 +150,36 @@ def block_forward(
 ) -> (hidden_states, key_cache, value_cache)
 ```
 
-### `_run_forward(model, input_ids, position_ids, attn_mask, key_caches, value_caches, is_filling, token_index, cache_position)`
+### `prepare_for_spyre(model)` (custom path)
 
-Full model forward: embedding → RoPE → N compiled blocks → final norm
-→ lm_head. Returns logits.
-
-### `prepare_for_spyre(model)`
-
-Patches the model in-place:
+Typical structure:
 1. `prepare_rope_and_heads(model)` — checks head_dim, pads if needed, creates `PrecomputedRotaryEmbedding`
-2. Patch RMSNorm class
-3. Pad LM head
-4. Compile all blocks
+2. `patch_rmsnorm(ModelRMSNorm)`
+3. `pad_lm_head(model)`
+4. Compile blocks: `model._spyre_compiled_blocks = [_make_compiled_block(l) for l in get_backbone(model).layers]`
 
 Loading and generation are handled by `AutoSpyreModelForCausalLM`
-(see Public API in ARCHITECTURE.md) — adapters no longer need
-`load_model`/`generate` wrappers.
+— adapters no longer need `load_model`/`generate` wrappers.
 
-## Step 4: Register in Tests
+## Step 4: Register in Auto-Loader
+
+Add the model's config class and adapter module to
+`CONFIG_TO_ADAPTER_MODULE_MAPPING` in `hf_adapters/auto_spyre_model.py`:
+
+```python
+from transformers import MyModelConfig
+from hf_adapters import hf_mymodel
+
+CONFIG_TO_ADAPTER_MODULE_MAPPING = {
+    ...
+    MyModelConfig: hf_mymodel,
+}
+```
+
+This enables `AutoSpyreModelForCausalLM.from_pretrained()` to
+automatically select the correct adapter.
+
+## Step 5: Register in Tests
 
 Add an entry to the `MODELS` dict in `tests/test_adapter_cpu_accuracy.py`:
 
@@ -134,21 +195,24 @@ Optional fields:
 - `"dtype": "float32"` — use if fp16 overflows on CPU (e.g., large multipliers)
 - `"load_fn": True` — use if your adapter has a custom `load_hf_model()` function
 
-## Step 5: Run CPU Accuracy Test
+## Step 6: Run CPU Accuracy Test
 
 ```bash
 source .venv/bin/activate
 python3 tests/test_adapter_cpu_accuracy.py mymodel
+python3 tests/test_adapter_cpu_accuracy.py mymodel --auto-loader
 ```
 
-This runs prefill + 4 decode steps through both stock HuggingFace and
-your adapter, comparing top-1 token selections. All must match.
+The first command runs prefill + 4 decode steps through both stock
+HuggingFace and your adapter, comparing top-1 token selections. All
+must match. The `--auto-loader` variant verifies the end-to-end path
+through `AutoSpyreModelForCausalLM`.
 
 **Important:** The test runs the HF reference forward *before* calling
 `prepare_for_spyre()`, because the RMSNorm patch modifies the class
 globally.
 
-## Step 6: Test on Spyre
+## Step 7: Test on Spyre
 
 Once CPU accuracy passes, test on hardware (requires Spyre pod access):
 
@@ -163,7 +227,7 @@ python3 tests/test_e2e_smoke_spyre.py mymodel
 python3 tests/test_e2e_token_compare_spyre.py mymodel
 ```
 
-## Step 7: Update Documentation
+## Step 8: Update Documentation
 
 1. Add the model to the "Verified Checkpoints" table in `ARCHITECTURE.md`
 2. Add the adapter to the "Model Family Coverage" table
@@ -172,7 +236,7 @@ python3 tests/test_e2e_token_compare_spyre.py mymodel
 ## Common Gotchas
 
 - **RMSNorm patch is global** — always run HF reference inference before `prepare_for_spyre()`
-- **Zero-length tensors crash Spyre** — create empty caches with `device=` param, never `.to("spyre")` on shape-0 tensor
+- **Zero-length tensors crash on Spyre** — create empty caches with `device=` param, never `.to("spyre")` on shape-0 tensor
 - **CPU test compile overhead** — use `getattr(block, "_orig_mod", block)` to unwrap `torch.compile` in CPU-only paths
 - **Test ordering** — run `test_adapter_cpu_accuracy.py` first; if tokens don't match on CPU, Spyre testing is pointless
 
@@ -180,116 +244,40 @@ python3 tests/test_e2e_token_compare_spyre.py mymodel
 
 ## Worked Example: Granite 3.3 2B (head_dim padding)
 
-This walks through how Granite 3.3 2B was onboarded. It shares the
-same adapter as Granite 3.3 8B (`hf_granite.py`) but required
-head_dim padding because `head_dim=64` → `D/2=32`, which is less than
-one Spyre stick (64 elements).
+Granite 3.3 2B shares the same adapter as 8B (`hf_granite.py`) but
+requires head_dim padding: `head_dim=64` → `D/2=32 < 64` (one Spyre stick).
 
-### 1. Discovered the constraint
+### Discovery
 
 ```python
-from transformers import AutoConfig
 config = AutoConfig.from_pretrained("ibm-granite/granite-3.3-2b-instruct")
-print(config.head_dim)  # 64
-print(config.head_dim // 2)  # 32 — LESS than 64, fails stick alignment!
+print(config.head_dim // 2)  # 32 — fails stick alignment!
 ```
 
-Without padding, `torch.compile` on Spyre produces:
-```
-RuntimeError: Could not find a host dimension matching stick expr d4 in [...]
-```
+Without padding, Spyre compile fails with:
+`RuntimeError: Could not find a host dimension matching stick expr d4 in [...]`
 
-### 2. Applied head_dim padding in `prepare_for_spyre()`
+### How it's handled
 
-The current `hf_granite.py` handles both 8B (no padding) and 2B
-(needs padding) via a single call to `prepare_rope_and_heads`:
+`prepare_rope_and_heads(model)` detects `head_dim/2 < BLOCK_SIZE` and
+calls `pad_attention_heads()` to zero-pad Q/K/V/O weights from 64→128:
 
-```python
-def prepare_for_spyre(model):
-    from transformers.models.granite.modeling_granite import GraniteRMSNorm
+| Projection | Padding strategy |
+|-----------|-----------------|
+| Q, K | Interleaved per RoPE `[2, D/2]` groups (preserves rotation structure) |
+| V | Simple end-padding (no RoPE applied) |
+| O | Simple end-padding on input dim |
 
-    prepare_rope_and_heads(model)  # checks head_dim, pads if needed, creates RoPE
-    patch_rmsnorm(GraniteRMSNorm)
-    pad_lm_head(model)
-    model._spyre_compiled_blocks = [
-        _make_compiled_block(layer) for layer in model.model.layers
-    ]
-```
+The block forward uses `attn.head_dim` (now 128) — no conditional logic needed.
 
-Under the hood, `prepare_rope_and_heads` (in `hf_common.py`) does:
+### Why it's numerically exact
 
-```python
-def prepare_rope_and_heads(model):
-    cfg = model.config
-    orig_head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+- Q/K padded dims multiply with zero RoPE entries (identity rotation)
+- V/O padded dims are zero, contribute nothing to output
 
-    # Compute minimum stick-aligned head_dim
-    stick_aligned_head_dim = (
-        (orig_head_dim + 2 * BLOCK_SIZE - 1) // (2 * BLOCK_SIZE)
-    ) * (2 * BLOCK_SIZE)
-
-    padded_head_dim = None
-    if stick_aligned_head_dim > orig_head_dim:
-        padded_head_dim = stick_aligned_head_dim  # 64 → 128
-        pad_attention_heads(
-            model, model.model.layers, orig_head_dim, padded_head_dim,
-            cfg.num_attention_heads, cfg.num_key_value_heads,
-        )
-
-    model._spyre_rope = PrecomputedRotaryEmbedding(
-        model.model.rotary_emb, padded_head_dim=padded_head_dim,
-    )
-```
-
-### 3. What `pad_attention_heads()` does
-
-For each layer, it zero-pads the weight matrices:
-
-| Projection | Original shape | Padded shape | Padding strategy |
-|-----------|---------------|-------------|-----------------|
-| `q_proj` | `[D, num_heads * 64]` | `[D, num_heads * 128]` | Interleaved per RoPE `[2, D/2]` groups |
-| `k_proj` | `[D, num_kv_heads * 64]` | `[D, num_kv_heads * 128]` | Interleaved per RoPE groups |
-| `v_proj` | `[D, num_kv_heads * 64]` | `[D, num_kv_heads * 128]` | Simple end-padding (no RoPE) |
-| `o_proj` | `[num_heads * 64, D]` | `[num_heads * 128, D]` | Simple end-padding |
-
-The interleaved padding for Q/K preserves the `[cos, -sin; sin, cos]`
-rotation matrix structure that `apply_rope_matmul` expects.
-
-### 4. Block forward works unchanged
-
-The block function uses `attn.head_dim` (which is now 128 after
-padding), so no special-casing is needed in the block itself:
-
-```python
-q = attn.q_proj(h).view(bsz, seq_len, -1, attn.head_dim).transpose(1, 2)
-k = attn.k_proj(h).view(bsz, seq_len, -1, attn.head_dim).transpose(1, 2)
-```
-
-### 5. Registered the 2B variant in tests
-
-```python
-# tests/test_adapter_cpu_accuracy.py
-"granite2b": {
-    "name": "Granite 3.3 2B",
-    "path": "ibm-granite/granite-3.3-2b-instruct",
-    "adapter": "hf_granite.py",  # same adapter as 8B
-},
-```
-
-### 6. Verified
+### Verification
 
 ```bash
 python3 tests/test_adapter_cpu_accuracy.py granite2b
-# ✓ All tokens match — padding is numerically invisible
+# All tokens match — same adapter handles both 2B and 8B
 ```
-
-The zero-padding produces identical results because:
-- Q/K padded dimensions multiply with zero RoPE entries (identity rotation)
-- V padded dimensions are zero, contribute nothing to attention output
-- O projection's padded input rows are zero, contribute nothing to output
-
-### Key Takeaway
-
-Head_dim padding is handled entirely in `prepare_for_spyre()` — the
-block forward function doesn't need any conditional logic. The adapter
-works for both padded and non-padded variants of the same architecture.
