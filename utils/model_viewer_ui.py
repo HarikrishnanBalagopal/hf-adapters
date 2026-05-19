@@ -144,11 +144,7 @@ class ModelDataViewer:
         return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
 
 
-# Global viewer instance
-viewer = ModelDataViewer("resources/top_generative_models.csv")
-
-# Global UI state
-ui_state = {"content_container": None, "stats_cards": {}, "filter_selects": {}}
+CSV_PATH = "resources/top_generative_models.csv"
 
 _UNSET = object()
 
@@ -216,7 +212,6 @@ def create_data_table(data: List[Dict[str, Any]], columns: List[str]):
     if not data:
         ui.label("No data to display").classes("text-gray-500 text-center p-4")
         return
-
     # Define column configurations
     column_configs = [
         {
@@ -384,33 +379,53 @@ def create_data_table(data: List[Dict[str, Any]], columns: List[str]):
     )
 
 
-def refresh_display():
+def refresh_display(viewer: ModelDataViewer, content_container) -> None:
     """Refresh the entire display with current filters."""
     viewer.apply_filters()
 
-    # Clear and rebuild the content
-    if ui_state["content_container"] is not None:
-        ui_state["content_container"].clear()
+    if content_container is None:
+        return
 
-        with ui_state["content_container"]:
-            # Statistics
-            stats = viewer.get_coverage_stats()
-            create_stats_card(stats)
+    content_container.clear()
 
-            # Model type distribution
-            # type_stats = viewer.get_model_type_stats()
-            # create_model_type_chart(type_stats)
+    with content_container:
+        # Statistics
+        stats = viewer.get_coverage_stats()
+        create_stats_card(stats)
 
-            # Data table
-            with ui.card().classes("w-full"):
-                ui.label(
-                    f"📋 Models Table ({len(viewer.filtered_data)} models)"
-                ).classes("text-xl font-bold mb-2")
-                create_data_table(viewer.filtered_data, viewer.columns)
+        # Model type distribution
+        # type_stats = viewer.get_model_type_stats()
+        # create_model_type_chart(type_stats)
+
+        # Data table
+        with ui.card().classes("w-full"):
+            ui.label(f"📋 Models Table ({len(viewer.filtered_data)} models)").classes(
+                "text-xl font-bold mb-2"
+            )
+            create_data_table(viewer.filtered_data, viewer.columns)
 
 
-def create_filter_panel():
-    """Create the filter panel."""
+def create_filter_panel_lazy(viewer: ModelDataViewer, refresh: Any) -> None:
+    """Create the filter panel. `refresh` is a zero-arg callback invoked
+    after every filter mutation; it should re-render the content container."""
+
+    def update_filter(field: str, value: List[str]) -> None:
+        viewer.filters[field] = value if value else []
+        refresh()
+
+    def update_params_range(min_b: Any, max_b: Any) -> None:
+        if min_b is not _UNSET:
+            viewer.params_min = float(min_b) * 1e9 if min_b not in (None, "") else None
+        if max_b is not _UNSET:
+            viewer.params_max = float(max_b) * 1e9 if max_b not in (None, "") else None
+        refresh()
+
+    def clear_filters() -> None:
+        viewer.filters.clear()
+        viewer.params_min = None
+        viewer.params_max = None
+        refresh()
+
     with ui.card().classes("w-full mb-4"):
         ui.label("🔍 Filters").classes("text-xl font-bold mb-2")
         ui.label("Select values to filter (multiple selection allowed)").classes(
@@ -480,30 +495,6 @@ def create_filter_panel():
             )
 
 
-def update_filter(field: str, value: List[str]):
-    """Update a specific filter and refresh the display immediately."""
-    viewer.filters[field] = value if value else []
-    refresh_display()
-
-
-def update_params_range(min_b: Any, max_b: Any):
-    """Update the params range filter.
-    Pass the sentinel `_UNSET` for the side you don't want to change."""
-    if min_b is not _UNSET:
-        viewer.params_min = float(min_b) * 1e9 if min_b not in (None, "") else None
-    if max_b is not _UNSET:
-        viewer.params_max = float(max_b) * 1e9 if max_b not in (None, "") else None
-    refresh_display()
-
-
-def clear_filters():
-    """Clear all filters and refresh."""
-    viewer.filters.clear()
-    viewer.params_min = None
-    viewer.params_max = None
-    refresh_display()
-
-
 # Main UI
 @ui.page("/adapter/{module_name}")
 def adapter_source_page(module_name: str):
@@ -523,6 +514,10 @@ def adapter_source_page(module_name: str):
 @ui.page("/")
 def main_page():
     """Main page of the application."""
+    # Per-session state: each browser connection gets its own viewer so
+    # filters / params range / filtered_data are not shared across users.
+    viewer = ModelDataViewer(CSV_PATH)
+
     # Header
     with ui.header().classes(
         "items-center justify-between bg-gradient-to-r from-blue-600 to-purple-600"
@@ -546,14 +541,22 @@ def main_page():
 
     # Main content
     with ui.column().classes("w-full max-w-[1600px] mx-auto p-4"):
-        # Filter panel
-        create_filter_panel()
+        # Filter panel — renders first (at top of page).
+        # The content container is created right after so filter callbacks
+        # can refresh it. We pass a one-element list as a late-bound reference
+        # because the container doesn't exist yet at panel-creation time.
+        content_ref: List[Any] = [None]
 
-        # Content container (will be refreshed)
-        ui_state["content_container"] = ui.column().classes("w-full")
+        def refresh() -> None:
+            refresh_display(viewer, content_ref[0])
+
+        create_filter_panel_lazy(viewer, refresh)
+
+        # Content container (rendered below the filter panel).
+        content_ref[0] = ui.column().classes("w-full")
 
         # Initial display
-        refresh_display()
+        refresh()
 
 
 def main():
