@@ -113,7 +113,12 @@ class ModelDataViewer:
         """Calculate coverage statistics for supported models."""
         total = len(self.filtered_data)
         if total == 0:
-            return {"total": 0, "supported": 0, "percentage": 0.0}
+            return {
+                "total": 0,
+                "supported": 0,
+                "unsupported": 0,
+                "percentage": 0.0,
+            }
 
         supported = sum(
             1
@@ -336,12 +341,21 @@ def create_data_table(data: List[Dict[str, Any]], columns: List[str]):
         )
         rows.append(formatted_row)
 
-    table = ui.table(
-        columns=column_configs,
-        rows=rows,
-        row_key="rank",
-        pagination={"rowsPerPage": 20, "sortBy": "downloads", "descending": True},
-    ).classes("w-full")
+    with ui.element("div").classes("w-full overflow-x-auto"):
+        table = (
+            ui.table(
+                columns=column_configs,
+                rows=rows,
+                row_key="rank",
+                pagination={
+                    "rowsPerPage": 20,
+                    "sortBy": "downloads",
+                    "descending": True,
+                },
+            )
+            .classes("min-w-[1600px]")
+            .props("dense")
+        )
 
     table.add_slot(
         "body-cell-is_supported",
