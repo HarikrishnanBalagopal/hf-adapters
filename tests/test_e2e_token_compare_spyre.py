@@ -32,9 +32,12 @@ import traceback
 
 import torch
 import torch.nn.functional as F
-import torch_spyre  # noqa: F401 — registers Spyre device
 
-from hf_adapters.hf_common import BLOCK_SIZE
+from hf_adapters.hf_common import (
+    BLOCK_SIZE,
+    _move_to_spyre_with_layout,
+    _untie_embedding_and_lm_head,
+)
 
 DEVICE = "spyre"
 
@@ -355,9 +358,10 @@ def run_model_test(model_key, num_decode=4):
 
     # --- Adapter on Spyre ---
     print("  Preparing adapter ...")
+    _untie_embedding_and_lm_head(model)
     adapter.prepare_for_spyre(model)
     print("  Moving model to Spyre ...")
-    model.to(DEVICE)
+    _move_to_spyre_with_layout(model, torch.float16)
     print("  Running adapter on Spyre ...")
     adapter_results = adapter_greedy_steps(
         adapter._run_forward,

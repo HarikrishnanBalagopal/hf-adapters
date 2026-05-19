@@ -29,7 +29,8 @@ import sys
 import traceback
 
 import torch
-import torch_spyre  # noqa: F401 — registers Spyre device
+
+from hf_adapters.hf_common import _move_to_spyre_with_layout, _untie_embedding_and_lm_head
 
 DEVICE = "spyre"
 SEQ_LEN = 64  # prefill sequence length (one Spyre stick)
@@ -525,6 +526,7 @@ def test_model(model_key):
     # Prepare adapter (patches RMSNorm, creates compiled blocks, etc.)
     adapter = importlib.import_module(info["adapter"])
     print("  Preparing adapter ...")
+    _untie_embedding_and_lm_head(model)
     adapter.prepare_for_spyre(model)
 
     num_blocks = len(model._spyre_compiled_blocks)
@@ -556,7 +558,7 @@ def test_model(model_key):
 
     # --- Phase B: Move model to Spyre, run compiled blocks ---
     print("  Moving model to Spyre ...")
-    model.to(DEVICE)
+    _move_to_spyre_with_layout(model, torch.float16)
     print(f"  Phase B: running {num_blocks} blocks on Spyre ...")
 
     results = []

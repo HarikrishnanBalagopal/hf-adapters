@@ -315,13 +315,7 @@ def patch_rmsnorm(rmsnorm_cls):
         if hidden_states.device.type == "spyre":
             # Spyre path: no dtype conversion, stay in fp16
             variance = (hidden_states * hidden_states).mean(-1, keepdim=True)
-            eps = torch.ops.spyre.full(
-                (1,),
-                self.variance_epsilon,
-                hidden_states.device,
-                torch.float16,
-            )
-            return self.weight * (hidden_states * torch.rsqrt(variance + eps))
+            return self.weight * (hidden_states * torch.rsqrt(variance + self.variance_epsilon))
         else:
             # CPU path: use float32 for numerical stability (matches stock HF)
             xf = hidden_states.float()
@@ -487,6 +481,75 @@ def _patch_torch_empty():
     torch.empty._hf_adapters_patched = True
 
 
+def _embedding_param_ids(model):
+    """Data-pointers of weights that must keep the default (column-major) layout.
+
+    The token embedding is used as a gather, not a matmul, so it should not
+    get a row-major SpyreTensorLayout. Returns the set of ``data_ptr()`` values
+    for the embedding weight(s) we want to leave alone.
+    """
+    ids = set()
+    backbone = get_backbone(model)
+    embed = getattr(backbone, "embed_tokens", None)
+    if embed is not None and hasattr(embed, "weight"):
+        ids.add(embed.weight.data_ptr())
+    return ids
+
+
+def _untie_embedding_and_lm_head(model):
+    """If ``embed_tokens.weight`` and ``lm_head.weight`` share storage, clone the
+    LM head's weight so each can take a different Spyre layout.
+    """
+    if not hasattr(model, "lm_head"):
+        return
+    backbone = get_backbone(model)
+    embed = getattr(backbone, "embed_tokens", None)
+    if embed is None:
+        return
+    if embed.weight.data_ptr() == model.lm_head.weight.data_ptr():
+        model.lm_head.weight = nn.Parameter(
+            model.lm_head.weight.detach().clone(), requires_grad=False
+        )
+        if hasattr(model, "config"):
+            model.config.tie_word_embeddings = False
+
+
+def _move_to_spyre_with_layout(model, dtype):
+    """Move all parameters and buffers to Spyre with row-major layout for 2D
+    matmul weights, except embedding weights which keep the default layout.
+    """
+    from torch_spyre._C import SpyreTensorLayout
+
+    skip_layout_ptrs = _embedding_param_ids(model)
+
+    def _alloc_on_spyre(t: torch.Tensor) -> torch.Tensor:
+        if t.dim() > 1 and t.data_ptr() not in skip_layout_ptrs:
+            stl = SpyreTensorLayout(t.shape, t.stride(), dtype, [1, 0])
+        else:
+            stl = None
+        new = torch.empty(
+            t.shape,
+            device=torch.device(DEVICE),
+            device_layout=stl,
+            dtype=dtype,
+        )
+        new.copy_(t.to(dtype))
+        return new
+
+    for name, param in list(model.named_parameters()):
+        new = _alloc_on_spyre(param.data)
+        module_path, _, attr = name.rpartition(".")
+        owner = model.get_submodule(module_path) if module_path else model
+        setattr(owner, attr, nn.Parameter(new, requires_grad=False))
+
+    for name, buf in list(model.named_buffers()):
+        new = _alloc_on_spyre(buf)
+        module_path, _, attr = name.rpartition(".")
+        owner = model.get_submodule(module_path) if module_path else model
+        persistent = attr not in owner._non_persistent_buffers_set
+        owner.register_buffer(attr, new, persistent=persistent)
+
+
 def load_model_common(model_path, prepare_fn, dtype=torch.float16, auto_model_cls=None):
     """Load an HF model, apply Spyre adaptations, move to device.
 
@@ -511,9 +574,10 @@ def load_model_common(model_path, prepare_fn, dtype=torch.float16, auto_model_cl
     )
     model.eval()
     model.requires_grad_(False)
+    _untie_embedding_and_lm_head(model)
     prepare_fn(model)
     print("Moving model to Spyre ...")
-    model.to(DEVICE)
+    _move_to_spyre_with_layout(model, dtype)
     print("Model ready.")
     return model
 

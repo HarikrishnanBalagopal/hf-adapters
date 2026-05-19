@@ -27,8 +27,8 @@ Verifies:
 import sys
 import time
 import traceback
+import torch
 
-import torch_spyre  # noqa: F401 — registers Spyre device
 
 MODEL_REGISTRY = {
     "qwen3": {
@@ -117,20 +117,21 @@ MODEL_REGISTRY = {
 
 def run_smoke(model_key):
     """Load model, generate 5 tokens, validate output."""
-    import importlib
-
     from transformers import AutoTokenizer
 
+    from hf_adapters import AutoSpyreModelForCausalLM
+
     info = MODEL_REGISTRY[model_key]
-    adapter = importlib.import_module(info["adapter"])
 
     print(f"\n{'='*70}")
     print(f"  {info['name']}: loading from {info['path']}")
     print(f"{'='*70}")
 
+    _ = torch.empty(64, dtype=torch.float16, device="spyre")
+
     # Load model (downloads weights, prepares, moves to Spyre)
     t0 = time.time()
-    model = adapter.load_model(info["path"])
+    model = AutoSpyreModelForCausalLM.from_pretrained(info["path"])
     load_time = time.time() - t0
     print(f"  Load time: {load_time:.1f}s")
 
@@ -140,8 +141,7 @@ def run_smoke(model_key):
 
     # Generate
     t0 = time.time()
-    outputs = adapter.generate(
-        model,
+    outputs = model.generate(
         tokenizer,
         [prompt],
         max_new_tokens=5,
