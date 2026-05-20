@@ -315,7 +315,9 @@ def patch_rmsnorm(rmsnorm_cls):
         if hidden_states.device.type == "spyre":
             # Spyre path: no dtype conversion, stay in fp16
             variance = (hidden_states * hidden_states).mean(-1, keepdim=True)
-            return self.weight * (hidden_states * torch.rsqrt(variance + self.variance_epsilon))
+            return self.weight * (
+                hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+            )
         else:
             # CPU path: use float32 for numerical stability (matches stock HF)
             xf = hidden_states.float()
@@ -518,6 +520,11 @@ def _move_to_spyre_with_layout(model, dtype):
     """Move all parameters and buffers to Spyre with row-major layout for 2D
     matmul weights, except embedding weights which keep the default layout.
     """
+    # Prime torch-spyre autoload before importing torch_spyre._C or calling
+    # torch.empty(..., device_layout=...). Calls with the spyre-only
+    # device_layout kwarg fail kwarg validation before dispatch.
+    torch.empty(1, device=DEVICE)
+
     from torch_spyre._C import SpyreTensorLayout
 
     skip_layout_ptrs = _embedding_param_ids(model)

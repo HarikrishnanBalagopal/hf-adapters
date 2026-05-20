@@ -27,8 +27,6 @@ Verifies:
 import sys
 import time
 import traceback
-import torch
-
 
 MODEL_REGISTRY = {
     "qwen3": {
@@ -126,8 +124,6 @@ def run_smoke(model_key):
     print(f"\n{'='*70}")
     print(f"  {info['name']}: loading from {info['path']}")
     print(f"{'='*70}")
-
-    _ = torch.empty(64, dtype=torch.float16, device="spyre")
 
     # Load model (downloads weights, prepares, moves to Spyre)
     t0 = time.time()
