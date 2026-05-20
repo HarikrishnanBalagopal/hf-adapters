@@ -30,7 +30,10 @@ import traceback
 
 import torch
 
-from hf_adapters.hf_common import _move_to_spyre_with_layout, _untie_embedding_and_lm_head
+from hf_adapters.hf_common import (
+    _move_to_spyre_with_layout,
+    _untie_embedding_and_lm_head,
+)
 
 DEVICE = "spyre"
 SEQ_LEN = 64  # prefill sequence length (one Spyre stick)

@@ -27,8 +27,8 @@ Verifies:
 import sys
 import time
 import traceback
-import torch
 
+import torch
 
 MODEL_REGISTRY = {
     "qwen3": {

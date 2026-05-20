@@ -315,7 +315,9 @@ def patch_rmsnorm(rmsnorm_cls):
         if hidden_states.device.type == "spyre":
             # Spyre path: no dtype conversion, stay in fp16
             variance = (hidden_states * hidden_states).mean(-1, keepdim=True)
-            return self.weight * (hidden_states * torch.rsqrt(variance + self.variance_epsilon))
+            return self.weight * (
+                hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+            )
         else:
             # CPU path: use float32 for numerical stability (matches stock HF)
             xf = hidden_states.float()
