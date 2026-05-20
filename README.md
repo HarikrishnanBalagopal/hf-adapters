@@ -49,6 +49,21 @@ print(outputs[0])
 
 The `AutoSpyreModelForCausalLM` class automatically selects the correct adapter module based on the model's config type.
 
+## Embedding Models
+
+For embedding models, use the `sentence-transformers` library with the `backend="spyre"` parameter:
+
+```python
+import hf_adapters.st_backend  # Register Spyre backend
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", backend="spyre")
+embeddings = model.encode(["hello world", "how are you"])
+```
+
+The `st_backend` module automatically patches `sentence-transformers` to apply the relevant Spyre adapter when loading the model. All standard SentenceTransformer methods (`encode()`, `similarity()`, etc.) work unchanged.
+Currently just decoder-only models are supported.
+
 ## Repo Structure
 
 ```
