@@ -32,11 +32,11 @@ import traceback
 
 import torch
 import torch.nn.functional as F
+import torch_spyre  # noqa: F401 — patches torch.empty to accept device_layout
 
 from hf_adapters.hf_common import (
     BLOCK_SIZE,
     _move_to_spyre_with_layout,
-    _patch_torch_empty,
     _untie_embedding_and_lm_head,
 )
 
@@ -359,7 +359,6 @@ def run_model_test(model_key, num_decode=4):
 
     # --- Adapter on Spyre ---
     print("  Preparing adapter ...")
-    _patch_torch_empty()
     _untie_embedding_and_lm_head(model)
     adapter.prepare_for_spyre(model)
     print("  Moving model to Spyre ...")
