@@ -526,6 +526,10 @@ def _move_to_spyre_with_layout(model, dtype):
     """Move all parameters and buffers to Spyre with row-major layout for 2D
     matmul weights, except embedding weights which keep the default layout.
     """
+    if torch.device(DEVICE).type != "spyre":
+        model.to(dtype=dtype)
+        return
+
     # Prime torch-spyre autoload before importing torch_spyre._C or calling
     # torch.empty(..., device_layout=...). Calls with the spyre-only
     # device_layout kwarg fail kwarg validation before dispatch.
