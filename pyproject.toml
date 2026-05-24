@@ -59,3 +59,7 @@ files = ["hf_adapters/**/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Spyre-pod-only tests: they import torch_spyre and set DEVICE="spyre" at
+# module level; running them under pytest on a CPU-only host fails at
+# collection. Run them directly with `python3 tests/test_*_spyre*.py`.
+addopts = "--ignore-glob=tests/test_*spyre*.py"
