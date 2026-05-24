@@ -1035,8 +1035,17 @@ def encoder_backbone_forward(model, input_ids, attn_mask, position_ids, token_ty
         + emb.token_type_embeddings(token_type_ids)
     )
     h = emb.LayerNorm(h)
+    # Spyre layout workaround: BERT post-LN ends each block on a broadcast
+    # against a 1D weight/bias. Spyre tensors produced this way read
+    # correctly via ``.to("cpu")`` but are mis-read by subsequent on-device
+    # ops, so the next compiled block's matmul sees garbage. ``.clone()``
+    # in eager Python (outside torch.compile) allocates a fresh
+    # canonical-layout tensor and copies through, fixing the handoff.
+    h = h.clone() if h.device.type == "spyre" else h
     for compiled_block in model._spyre_compiled_blocks:
         h = compiled_block(h, attn_mask)
+        if h.device.type == "spyre":
+            h = h.clone()
     return h
 
 
