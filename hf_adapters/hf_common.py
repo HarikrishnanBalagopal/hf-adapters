@@ -433,8 +433,10 @@ def build_expansion_mask(
     return mask
 
 
-def build_prefill_mask_right_padded(batch_size, padded_len, actual_lengths):
-    """Causal prefill mask for right-padded sequences.
+def build_prefill_mask_right_padded(
+    batch_size, padded_len, actual_lengths, is_causal=True
+):
+    """Prefill mask for right-padded sequences.
 
     Used by the embedding path. Sequences are right-padded: real tokens
     occupy positions ``0..actual_lengths[b]-1`` and trailing positions
@@ -442,8 +444,11 @@ def build_prefill_mask_right_padded(batch_size, padded_len, actual_lengths):
     ``padded_len`` since there is no decode budget — embeddings are
     prefill-only.
 
+    When ``is_causal=True`` (default), token ``i`` attends to ``0..i``.
+    When ``is_causal=False``, real tokens attend to every real token —
+    used by embedding models with ``config.is_causal=False``.
+
     Compared to ``build_prefill_mask`` (left-padded, used by ``generate``):
-      - Causal triangle is identical (token ``i`` attends to ``0..i``).
       - Padding columns to mask are at the **end** of the row, not the start.
       - Output shape is ``[B, 1, padded_len, padded_len]``; there is no
         separate ``max_cache_len`` because no decode follows.
@@ -452,8 +457,9 @@ def build_prefill_mask_right_padded(batch_size, padded_len, actual_lengths):
     returning ``[B, actual_length, H]``.
     """
     mask = torch.zeros((batch_size, 1, padded_len, padded_len), dtype=torch.float16)
-    for i in range(padded_len):
-        mask[:, :, i, i + 1 :] = -torch.inf
+    if is_causal:
+        for i in range(padded_len):
+            mask[:, :, i, i + 1 :] = -torch.inf
     if isinstance(actual_lengths, torch.Tensor):
         for b in range(batch_size):
             mask[b, :, :, actual_lengths[b].item() :] = -torch.inf
@@ -522,6 +528,10 @@ def _move_to_spyre_with_layout(model, dtype):
     """Move all parameters and buffers to Spyre with row-major layout for 2D
     matmul weights, except embedding weights which keep the default layout.
     """
+    if torch.device(DEVICE).type != "spyre":
+        model.to(dtype=dtype)
+        return
+
     # Prime torch-spyre autoload before importing torch_spyre._C or calling
     # torch.empty(..., device_layout=...). Calls with the spyre-only
     # device_layout kwarg fail kwarg validation before dispatch.
@@ -1088,8 +1098,12 @@ def prefill_embed(
         actual = actual_lengths[b].item()
         position_ids[b, :actual] = torch.arange(actual)
 
-    # Causal right-padded mask
-    mask = build_prefill_mask_right_padded(bsz, padded_len, actual_lengths)
+    # Causal right-padded mask (or bidirectional for models with
+    # ``config.is_causal=False``)
+    is_causal = getattr(model.config, "is_causal", True)
+    mask = build_prefill_mask_right_padded(
+        bsz, padded_len, actual_lengths, is_causal=is_causal
+    )
 
     # Throwaway KV caches sized to padded_len (no decode budget)
     num_layers = model.config.num_hidden_layers
