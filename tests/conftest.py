@@ -67,12 +67,10 @@ EMBEDDING_MODELS = {
     "qwen2_embed": {
         "name": "GTE-Qwen2-1.5B",
         "path": "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
-        "adapter": None,
     },
     "e5_mistral": {
         "name": "E5-Mistral-7B",
         "path": "intfloat/e5-mistral-7b-instruct",
-        "adapter": None,
     },
 }
 
