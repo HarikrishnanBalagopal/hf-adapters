@@ -33,8 +33,7 @@ sentence-transformers) so module collection succeeds on hosts that lack
 import gc
 
 import pytest
-import torch.nn.functional as F
-from conftest import EMBEDDING_MODELS
+from conftest import EMBEDDING_MODELS, cosine_per_row
 
 # sentence_transformers is an optional dependency; skip the whole module if
 # it's missing. The hf_adapters.st_backend import is deferred to inside the
@@ -74,10 +73,7 @@ def test_st_backend(model_key, unwrap_compiled_blocks):
     del spyre_model
     gc.collect()
 
-    ref_norm = F.normalize(ref_embeddings.float(), dim=-1)
-    spyre_norm = F.normalize(spyre_embeddings.float(), dim=-1)
-    cos_sims = (ref_norm * spyre_norm).sum(dim=-1)
-
+    cos_sims = cosine_per_row(ref_embeddings, spyre_embeddings)
     min_sim = cos_sims.min().item()
     assert min_sim >= COS_SIM_THRESHOLD, (
         f"min cosine {min_sim:.6f} < threshold {COS_SIM_THRESHOLD}; "

@@ -36,8 +36,7 @@ import gc
 
 import pytest
 import torch
-import torch.nn.functional as F
-from conftest import EMBEDDING_MODELS
+from conftest import EMBEDDING_MODELS, encode_padded, min_cosine, torch_dtype_for
 from transformers import AutoModel, AutoTokenizer
 
 PROMPTS = [
@@ -46,44 +45,17 @@ PROMPTS = [
 ]
 COS_THRESHOLD = 0.9999
 
-MODELS = {k: v for k, v in EMBEDDING_MODELS.items() if v["adapter"] is not None}
-
-
-def _per_token_cosine(a, b, attention_mask):
-    """Mean and min cosine similarity over real (unmasked) tokens.
-
-    Args:
-        a, b: ``[B, L, H]`` hidden states.
-        attention_mask: ``[B, L]`` mask; ``1`` for real tokens.
-    """
-    a32 = a.float()
-    b32 = b.float()
-    cos = F.cosine_similarity(a32, b32, dim=-1)
-    mask = attention_mask.bool()
-    return cos[mask].mean().item(), cos[mask].min().item()
-
-
-def _encode(tokenizer):
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    encoded = tokenizer(
-        PROMPTS, return_tensors="pt", padding=True, padding_side="right"
-    )
-    return encoded["input_ids"], encoded["attention_mask"]
-
-
-def _torch_dtype(info):
-    return torch.float32 if info.get("dtype") == "float32" else torch.float16
+MODELS = {k: v for k, v in EMBEDDING_MODELS.items() if v.get("adapter") is not None}
 
 
 @pytest.mark.parametrize("model_key", list(MODELS.keys()), ids=list(MODELS.keys()))
 def test_manual_path(model_key, load_adapter, unwrap_compiled_blocks, hf_common_mod):
     info = MODELS[model_key]
     adapter_mod = load_adapter(info["adapter"])
-    torch_dtype = _torch_dtype(info)
+    torch_dtype = torch_dtype_for(info)
 
     tokenizer = AutoTokenizer.from_pretrained(info["path"])
-    input_ids, attention_mask = _encode(tokenizer)
+    input_ids, attention_mask = encode_padded(tokenizer, PROMPTS)
 
     # HF reference
     model = AutoModel.from_pretrained(info["path"], dtype=torch_dtype, device_map="cpu")
@@ -112,7 +84,7 @@ def test_manual_path(model_key, load_adapter, unwrap_compiled_blocks, hf_common_
     assert (
         adapter_hidden.shape == ref_hidden.shape
     ), f"shape mismatch: adapter {adapter_hidden.shape} vs ref {ref_hidden.shape}"
-    _, min_cos = _per_token_cosine(adapter_hidden, ref_hidden, attention_mask)
+    min_cos = min_cosine(adapter_hidden, ref_hidden, attention_mask)
     assert (
         min_cos >= COS_THRESHOLD
     ), f"min per-token cosine {min_cos:.6f} < threshold {COS_THRESHOLD}"
@@ -123,10 +95,10 @@ def test_auto_loader(
     model_key, auto_spyre_model, unwrap_compiled_blocks, hf_common_mod
 ):
     info = MODELS[model_key]
-    torch_dtype = _torch_dtype(info)
+    torch_dtype = torch_dtype_for(info)
 
     tokenizer = AutoTokenizer.from_pretrained(info["path"])
-    input_ids, attention_mask = _encode(tokenizer)
+    input_ids, attention_mask = encode_padded(tokenizer, PROMPTS)
 
     # HF reference (loaded fresh, before the auto-loader path).
     ref_model = AutoModel.from_pretrained(
@@ -157,7 +129,7 @@ def test_auto_loader(
     assert (
         adapter_hidden.shape == ref_hidden.shape
     ), f"shape mismatch: adapter {adapter_hidden.shape} vs ref {ref_hidden.shape}"
-    _, min_cos = _per_token_cosine(adapter_hidden, ref_hidden, attention_mask)
+    min_cos = min_cosine(adapter_hidden, ref_hidden, attention_mask)
     assert (
         min_cos >= COS_THRESHOLD
     ), f"min per-token cosine {min_cos:.6f} < threshold {COS_THRESHOLD}"
