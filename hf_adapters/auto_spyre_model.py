@@ -131,7 +131,7 @@ class AutoSpyreModelForCausalLM(AutoSpyreModel):
     decode loop.
     """
 
-    _auto_model_cls = AutoModelForCausalLM
+    _auto_model_cls = AutoModelForCausalLM  # type: ignore[assignment]
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, dtype=torch.float16):

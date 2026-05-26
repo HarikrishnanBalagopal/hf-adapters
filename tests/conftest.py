@@ -34,6 +34,13 @@ import sys
 import types
 
 import pytest
+from _helpers import (  # noqa: F401  (re-exported for tests via `from conftest import ...`)
+    cosine_per_row,
+    encode_padded,
+    load_hf_causal_lm,
+    min_cosine,
+    torch_dtype_for,
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADAPTERS_DIR = os.path.join(REPO_ROOT, "hf_adapters")

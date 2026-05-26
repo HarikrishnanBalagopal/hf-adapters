@@ -35,7 +35,8 @@ import gc
 
 import pytest
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from conftest import load_hf_causal_lm, torch_dtype_for
+from transformers import AutoTokenizer
 
 PROMPT = "The capital of France is"
 NUM_DECODE = 4
@@ -125,23 +126,6 @@ MODELS = {
         "load_fn": True,
     },
 }
-
-
-def _torch_dtype(info):
-    return torch.float32 if info.get("dtype") == "float32" else torch.float16
-
-
-def _load_hf_causal_lm(info, torch_dtype, adapter_mod=None):
-    """Load the HF reference model, honoring the per-entry ``load_fn`` flag."""
-    if info.get("load_fn"):
-        # Adapter module exposes load_hf_model for non-standard loading paths
-        # (e.g. granite-vision).
-        if adapter_mod is None:
-            raise RuntimeError("load_fn=True requires adapter_mod")
-        return adapter_mod.load_hf_model(info["path"], torch_dtype)
-    return AutoModelForCausalLM.from_pretrained(
-        info["path"], torch_dtype=torch_dtype, device_map="cpu"
-    )
 
 
 def hf_greedy_steps(model, input_ids, num_decode=NUM_DECODE):
@@ -270,13 +254,13 @@ def adapter_greedy_steps(run_forward_fn, model, input_ids, num_decode=NUM_DECODE
 def test_manual_path(model_key, load_adapter, unwrap_compiled_blocks):
     info = MODELS[model_key]
     adapter_mod = load_adapter(info["adapter"])
-    torch_dtype = _torch_dtype(info)
+    torch_dtype = torch_dtype_for(info)
 
     tokenizer = AutoTokenizer.from_pretrained(info["path"])
     input_ids = tokenizer(PROMPT, return_tensors="pt")["input_ids"]
 
     # Phase 1: HF reference
-    model = _load_hf_causal_lm(info, torch_dtype, adapter_mod=adapter_mod)
+    model = load_hf_causal_lm(info, torch_dtype, adapter_mod=adapter_mod)
     model.eval()
     model.requires_grad_(False)
     hf_results = hf_greedy_steps(model, input_ids, num_decode=NUM_DECODE)
@@ -284,7 +268,7 @@ def test_manual_path(model_key, load_adapter, unwrap_compiled_blocks):
     gc.collect()
 
     # Phase 2: adapter (fresh load — prepare_for_spyre is destructive)
-    model = _load_hf_causal_lm(info, torch_dtype, adapter_mod=adapter_mod)
+    model = load_hf_causal_lm(info, torch_dtype, adapter_mod=adapter_mod)
     model.eval()
     model.requires_grad_(False)
     adapter_mod.prepare_for_spyre(model)
@@ -308,7 +292,7 @@ def test_manual_path(model_key, load_adapter, unwrap_compiled_blocks):
 @pytest.mark.parametrize("model_key", list(MODELS.keys()), ids=list(MODELS.keys()))
 def test_auto_loader(model_key, auto_spyre_model, unwrap_compiled_blocks, load_adapter):
     info = MODELS[model_key]
-    torch_dtype = _torch_dtype(info)
+    torch_dtype = torch_dtype_for(info)
     tokenizer = AutoTokenizer.from_pretrained(info["path"])
 
     # Phase 1: auto-loader generate
@@ -322,7 +306,7 @@ def test_auto_loader(model_key, auto_spyre_model, unwrap_compiled_blocks, load_a
 
     # Phase 2: HF reference (fresh)
     adapter_mod = load_adapter(info["adapter"]) if info.get("load_fn") else None
-    hf_model = _load_hf_causal_lm(info, torch_dtype, adapter_mod=adapter_mod)
+    hf_model = load_hf_causal_lm(info, torch_dtype, adapter_mod=adapter_mod)
     hf_model.eval()
     hf_model.requires_grad_(False)
     encoded = tokenizer(PROMPT, return_tensors="pt")
