@@ -15,12 +15,19 @@
 """
 CPU accuracy test for the embedding path.
 
+Covers both decoder-backbone embedders (Qwen3-Embedding, etc.)
+and encoder-only models (e.g., BERT-family).
+
 For each registered embedder backbone, two parametrized test cases run:
 
   test_manual_path[<key>]
     Loads the backbone via stock ``AutoModel`` on CPU, captures the
     reference ``last_hidden_state``, then loads a fresh copy and applies
-    the adapter directly (``prepare_for_spyre`` + ``prefill_embed``).
+    the adapter directly (``prepare_for_spyre`` + the appropriate prefill
+    driver):
+    - ``prefill_encoder`` for encoder-only adapters
+      (adapter sets ``_is_encoder_only = True``).
+    - ``prefill_embed`` for decoder-backbone embedders.
     Asserts per-token cosine similarity stays above the threshold.
 
   test_auto_loader[<key>]
@@ -46,6 +53,18 @@ PROMPTS = [
 COS_THRESHOLD = 0.9999
 
 MODELS = {k: v for k, v in EMBEDDING_MODELS.items() if v.get("adapter") is not None}
+
+
+def _run_prefill(adapter_mod, hf_common_mod, model, input_ids, attention_mask):
+    """Dispatch to prefill_encoder or prefill_embed based on adapter type."""
+    if getattr(adapter_mod, "_is_encoder_only", False):
+        return hf_common_mod.prefill_encoder(
+            adapter_mod._run_backbone_forward, model, input_ids, attention_mask
+        )
+    else:
+        return hf_common_mod.prefill_embed(
+            adapter_mod._run_backbone_forward, model, input_ids, attention_mask
+        )
 
 
 @pytest.mark.parametrize("model_key", list(MODELS.keys()), ids=list(MODELS.keys()))
@@ -75,8 +94,8 @@ def test_manual_path(model_key, load_adapter, unwrap_compiled_blocks, hf_common_
     adapter_mod.prepare_for_spyre(model)
     unwrap_compiled_blocks(model)
     with torch.no_grad():
-        adapter_hidden, _ = hf_common_mod.prefill_embed(
-            adapter_mod._run_backbone_forward, model, input_ids, attention_mask
+        adapter_hidden, _ = _run_prefill(
+            adapter_mod, hf_common_mod, model, input_ids, attention_mask
         )
     del model
     gc.collect()
@@ -120,8 +139,8 @@ def test_auto_loader(
     unwrap_compiled_blocks(model)
     adapter_module = auto_spyre_model._resolve_adapter_module(info["path"])
     with torch.no_grad():
-        adapter_hidden, _ = hf_common_mod.prefill_embed(
-            adapter_module._run_backbone_forward, model, input_ids, attention_mask
+        adapter_hidden, _ = _run_prefill(
+            adapter_module, hf_common_mod, model, input_ids, attention_mask
         )
     del model
     gc.collect()
