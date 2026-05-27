@@ -28,24 +28,17 @@ import sys
 import time
 import traceback
 
-CAUSAL_LM_MODELS = {
-    "qwen3": "Qwen/Qwen3-0.6B",
-    "qwen2": "Qwen/Qwen2.5-1.5B",
-    "llama": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    "granite": "ibm-granite/granite-3.3-2b-instruct",
-    "granite4": "ibm-granite/granite-4.0-1b-base",
-    "smollm3": "HuggingFaceTB/SmolLM3-3B-Base",
-    "phi4": "microsoft/Phi-4-mini-instruct",
-    "olmo": "allenai/OLMo-1B-hf",
-    "olmo2": "allenai/OLMo-2-0425-1B",
-    "mistral": "mistralai/Mistral-7B-v0.3",
-    "granite-vision": "ibm-granite/granite-vision-4.1-4b",
-}
+# Import model registries and programmatically selected keys
+from model_registry import (
+    CAUSAL_KEYS,
+    CAUSAL_LM_MODELS,
+    EMBED_KEYS,
+    EMBEDDING_MODELS,
+)
 
-EMBEDDING_MODELS = {
-    "minilm": "sentence-transformers/all-MiniLM-L6-v2",
-    "qwen3_embed": "Qwen/Qwen3-Embedding-0.6B",
-}
+# Build simplified path-only dicts for this standalone script
+CAUSAL_LM_PATHS = {key: CAUSAL_LM_MODELS[key]["path"] for key in CAUSAL_KEYS}
+EMBEDDING_PATHS = {key: EMBEDDING_MODELS[key]["path"] for key in EMBED_KEYS}
 
 
 def load_causal_lm(key):
@@ -53,7 +46,7 @@ def load_causal_lm(key):
 
     from hf_adapters import AutoSpyreModelForCausalLM
 
-    path = CAUSAL_LM_MODELS[key]
+    path = CAUSAL_LM_PATHS[key]
     dtype = torch.float32 if key == "granite4" else torch.float16
 
     t0 = time.time()
@@ -72,7 +65,7 @@ def load_embedding(key):
 
     from hf_adapters import AutoSpyreModel
 
-    path = EMBEDDING_MODELS[key]
+    path = EMBEDDING_PATHS[key]
     t0 = time.time()
     model = AutoSpyreModel.from_pretrained(path, dtype=torch.float16)
     load_s = time.time() - t0
@@ -82,13 +75,13 @@ def load_embedding(key):
 
 
 def run(key):
-    if key in CAUSAL_LM_MODELS:
+    if key in CAUSAL_LM_PATHS:
         kind = "causal-LM"
-        path = CAUSAL_LM_MODELS[key]
+        path = CAUSAL_LM_PATHS[key]
         loader = load_causal_lm
-    elif key in EMBEDDING_MODELS:
+    elif key in EMBEDDING_PATHS:
         kind = "embedding"
-        path = EMBEDDING_MODELS[key]
+        path = EMBEDDING_PATHS[key]
         loader = load_embedding
     else:
         raise KeyError(key)
@@ -103,12 +96,12 @@ def run(key):
 
 
 if __name__ == "__main__":
-    all_keys = list(CAUSAL_LM_MODELS.keys()) + list(EMBEDDING_MODELS.keys())
+    all_keys = list(CAUSAL_LM_PATHS.keys()) + list(EMBEDDING_PATHS.keys())
     which = sys.argv[1:] if len(sys.argv) > 1 else all_keys
 
     results = []
     for key in which:
-        if key not in CAUSAL_LM_MODELS and key not in EMBEDDING_MODELS:
+        if key not in CAUSAL_LM_PATHS and key not in EMBEDDING_PATHS:
             print(f"Unknown: {key}. Options: {all_keys}")
             continue
         try:

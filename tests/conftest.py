@@ -33,6 +33,7 @@ import os
 import sys
 import types
 
+import model_registry  # Import module, not specific names yet
 import pytest
 from _helpers import (  # noqa: F401  (re-exported for tests via `from conftest import ...`)
     cosine_per_row,
@@ -65,122 +66,6 @@ _pkg.__path__ = [ADAPTERS_DIR]
 sys.modules["hf_adapters"] = _pkg
 
 
-CAUSAL_LM_MODELS = {
-    "qwen3": {
-        "name": "Qwen3 0.6B",
-        "path": "Qwen/Qwen3-0.6B",
-        "adapter": "hf_qwen3.py",
-    },
-    "granite": {
-        "name": "Granite 3.3 8B",
-        "path": "ibm-granite/granite-3.3-8b-instruct",
-        "adapter": "hf_granite.py",
-    },
-    "granite2b": {
-        "name": "Granite 3.3 2B",
-        "path": "ibm-granite/granite-3.3-2b-instruct",
-        "adapter": "hf_granite.py",
-    },
-    "granite4": {
-        "name": "Granite 4.0 1B",
-        "path": "ibm-granite/granite-4.0-1b-base",
-        "adapter": "hf_granitemoehybrid.py",
-        "dtype": "float32",  # fp16 overflows on CPU due to multipliers
-    },
-    "smollm3": {
-        "name": "SmolLM3 3B",
-        "path": "HuggingFaceTB/SmolLM3-3B-Base",
-        "adapter": "hf_smollm3.py",
-    },
-    "llama": {
-        "name": "TinyLlama 1.1B",
-        "path": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "adapter": "hf_llama.py",
-    },
-    "phi4": {
-        "name": "Phi-4 mini",
-        "path": "microsoft/Phi-4-mini-instruct",
-        "adapter": "hf_phi3.py",
-    },
-    "qwen2": {
-        "name": "Qwen2.5 1.5B",
-        "path": "Qwen/Qwen2.5-1.5B",
-        "adapter": "hf_qwen2.py",
-    },
-    "mistral": {
-        "name": "Mistral 7B v0.3",
-        "path": "mistralai/Mistral-7B-v0.3",
-        "adapter": "hf_mistral.py",
-    },
-    "olmo": {
-        "name": "OLMo 1B",
-        "path": "allenai/OLMo-1B-hf",
-        "adapter": "hf_olmo.py",
-    },
-    "olmo2": {
-        "name": "OLMo2 1B",
-        "path": "allenai/OLMo-2-0425-1B",
-        "adapter": "hf_olmo2.py",
-    },
-    "falcon3": {
-        "name": "Falcon 3 1B",
-        "path": "tiiuae/Falcon3-1B-Base",
-        "adapter": "hf_llama.py",
-    },
-    "deepseek-coder": {
-        "name": "DeepSeek-Coder 1.3B",
-        "path": "deepseek-ai/deepseek-coder-1.3b-base",
-        "adapter": "hf_llama.py",
-    },
-    # Ministral 3B is gated — requires HF auth. Tested on Spyre pod only.
-    # "ministral": {
-    #     "name": "Ministral 3B",
-    #     "path": "mistralai/Ministral-3B-Instruct",
-    #     "adapter": "hf_mistral.py",
-    # },
-    "yi": {
-        "name": "Yi 1.5 6B",
-        "path": "01-ai/Yi-1.5-6B",
-        "adapter": "hf_llama.py",
-    },
-    "granite-vision": {
-        "name": "Granite Vision 4.1 4B",
-        "path": "ibm-granite/granite-vision-4.1-4b",
-        "adapter": "hf_granite_vision.py",
-        "load_fn": True,
-    },
-}
-
-
-EMBEDDING_MODELS = {
-    "qwen3_embed": {
-        "name": "Qwen3-Embedding 0.6B",
-        "path": "Qwen/Qwen3-Embedding-0.6B",
-        "adapter": "hf_qwen3.py",
-    },
-    "qwen2_embed": {
-        "name": "GTE-Qwen2-1.5B",
-        "path": "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
-        "adapter": "hf_qwen2.py",
-    },
-    "e5_mistral": {
-        "name": "E5-Mistral-7B",
-        "path": "intfloat/e5-mistral-7b-instruct",
-        "adapter": "hf_mistral.py",
-    },
-    "bge_base": {
-        "name": "BGE-base-en-v1.5",
-        "path": "BAAI/bge-base-en-v1.5",
-        "adapter": "hf_bert.py",
-    },
-    "minilm": {
-        "name": "all-MiniLM-L6-v2",
-        "path": "sentence-transformers/all-MiniLM-L6-v2",
-        "adapter": "hf_bert.py",
-    },
-}
-
-
 def _load_adapter(filename):
     """Load an adapter .py file under hf_adapters/ as a real submodule."""
     mod_name = f"hf_adapters.{filename.replace('.py', '')}"
@@ -206,6 +91,19 @@ _auto_mod = importlib.util.module_from_spec(_auto_spec)
 sys.modules["hf_adapters.auto_spyre_model"] = _auto_mod
 _auto_spec.loader.exec_module(_auto_mod)
 setattr(_pkg, "auto_spyre_model", _auto_mod)
+
+# Now that auto_spyre_model is loaded with patched hf_common, populate the model lists
+model_registry.CAUSAL_KEYS, model_registry.EMBED_KEYS = (
+    model_registry._select_representative_models(
+        _auto_mod.CONFIG_TO_ADAPTER_MODULE_MAPPING
+    )
+)
+
+# Re-export for convenience
+CAUSAL_LM_MODELS = model_registry.CAUSAL_LM_MODELS
+EMBEDDING_MODELS = model_registry.EMBEDDING_MODELS
+CAUSAL_KEYS = model_registry.CAUSAL_KEYS  # noqa: F401
+EMBED_KEYS = model_registry.EMBED_KEYS  # noqa: F401
 
 
 def _unwrap_compiled_blocks(model):

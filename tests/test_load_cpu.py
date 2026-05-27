@@ -28,29 +28,10 @@ import gc
 
 import pytest
 from conftest import CAUSAL_LM_MODELS, EMBEDDING_MODELS, torch_dtype_for
-
-# One representative per adapter module — keeps load times reasonable while
-# exercising every entry in CONFIG_TO_ADAPTER_MODULE_MAPPING.
-_CAUSAL_KEYS = [
-    "qwen3",  # hf_qwen3
-    "qwen2",  # hf_qwen2
-    "llama",  # hf_llama (TinyLlama)
-    "granite2b",  # hf_granite
-    "granite4",  # hf_granitemoehybrid
-    "smollm3",  # hf_smollm3
-    "phi4",  # hf_phi3
-    "olmo",  # hf_olmo
-    "olmo2",  # hf_olmo2
-    "mistral",  # hf_mistral
-    "granite-vision",  # hf_granite_vision
-]
-_EMBED_KEYS = [
-    "minilm",  # hf_bert
-    "qwen3_embed",  # hf_qwen3 (embedder backbone)
-]
+from model_registry import CAUSAL_KEYS, EMBED_KEYS
 
 
-@pytest.mark.parametrize("model_key", _CAUSAL_KEYS, ids=_CAUSAL_KEYS)
+@pytest.mark.parametrize("model_key", CAUSAL_KEYS, ids=CAUSAL_KEYS)
 def test_load_causal_lm(model_key, auto_spyre_model):
     info = CAUSAL_LM_MODELS[model_key]
     model = auto_spyre_model.AutoSpyreModelForCausalLM.from_pretrained(
@@ -64,7 +45,7 @@ def test_load_causal_lm(model_key, auto_spyre_model):
     gc.collect()
 
 
-@pytest.mark.parametrize("model_key", _EMBED_KEYS, ids=_EMBED_KEYS)
+@pytest.mark.parametrize("model_key", EMBED_KEYS, ids=EMBED_KEYS)
 def test_load_embedding(model_key, auto_spyre_model):
     info = EMBEDDING_MODELS[model_key]
     model = auto_spyre_model.AutoSpyreModel.from_pretrained(
