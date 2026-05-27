@@ -35,27 +35,8 @@ import gc
 
 import pytest
 import torch
+from model_registry import CAUSAL_LM_MODELS as MODELS
 from transformers import AutoModelForCausalLM, AutoTokenizer
-
-# Registry: one representative per model family that exercises a distinct
-# code path (RoPE shape / GQA layout / head-dim padding / tokenizer).
-MODELS = {
-    "qwen3": {
-        "name": "Qwen3 0.6B",
-        "path": "Qwen/Qwen3-0.6B",
-        "adapter": "hf_qwen3.py",
-    },
-    "granite2b": {
-        "name": "Granite 3.3 2B",
-        "path": "ibm-granite/granite-3.3-2b-instruct",
-        "adapter": "hf_granite.py",
-    },
-    "llama": {
-        "name": "TinyLlama 1.1B",
-        "path": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "adapter": "hf_llama.py",
-    },
-}
 
 BLOCK_SIZE = 64  # mirrors hf_common.BLOCK_SIZE; kept local so case ids are stable
 
