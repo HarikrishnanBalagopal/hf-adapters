@@ -26,6 +26,10 @@ Differences from the CPU pytest version:
     expensive, so the same prepared model is reused for every case.
   - HF reference outputs are captured on CPU *before* the Spyre move (the
     RMSNorm patch is global and would contaminate a second CPU forward).
+  - Runs only a curated subset of the cases (each Spyre case takes minutes).
+
+Shared case tables and helpers live in ``_generate_edge_case_helpers.py`` so
+this script and the CPU pytest stay in sync.
 
 Usage (on the Spyre pod)::
 
@@ -43,6 +47,21 @@ import time
 import traceback
 
 import torch
+from _generate_edge_case_helpers import (
+    CASES as ALL_CASES,
+)
+from _generate_edge_case_helpers import (
+    EOS_CASES as ALL_EOS_CASES,
+)
+from _generate_edge_case_helpers import (
+    SPYRE_CASE_KEYS,
+    SPYRE_EOS_CASE_KEYS,
+    EosOverrideTokenizer,
+    greedy_token_ids,
+    hf_reference_outputs,
+    make_prompts,
+    pick_forced_eos_id,
+)
 from model_registry import CAUSAL_LM_MODELS
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -53,99 +72,8 @@ MODELS = CAUSAL_LM_MODELS
 
 # Curated subset — each Spyre case takes minutes, so we drop redundant lengths
 # and keep one representative per regime. The CPU pytest covers the full grid.
-CASES = {
-    "single_token_prompt": ([1], 16),  # extreme left-padding
-    "short_one_token": ([5], 1),  # prefill arm only
-    "short_block_minus_one": ([5], BLOCK_SIZE - 1),  # last fill of first block
-    "short_cross_block": ([5], BLOCK_SIZE + 1),  # first expansion + 1 fill
-    "short_two_blocks_plus": ([5], 2 * BLOCK_SIZE + 5),  # two expansions
-    "prompt_exactly_block": ([BLOCK_SIZE], 16),  # prompt == BLOCK_SIZE
-    "long_multi_block": ([2 * BLOCK_SIZE], 16),  # prompt > one block
-    "mixed_short": ([5, 12, 30], 16),  # batch=3, mixed lengths
-    "mixed_with_single_token": ([1, 5, 30], 16),  # batch w/ single-token row
-}
-
-EOS_CASES = {
-    "eos_first_token": ([0], 16),  # finished.all() trips on step 0
-    "eos_mid_block": ([10], 32),  # within first block
-    "eos_first_of_second_block": ([BLOCK_SIZE], BLOCK_SIZE + 16),  # expansion arm
-}
-
-
-# ---------------------------------------------------------------------------
-# Helpers — mirror the pytest version but plain functions, not fixtures
-# ---------------------------------------------------------------------------
-
-
-def _make_prompt_of_length(tokenizer, target_tokens):
-    base = "The quick brown fox jumps over the lazy dog. "
-    s = base
-    while len(tokenizer(s, add_special_tokens=False)["input_ids"]) < target_tokens:
-        s += base
-    ids = tokenizer(s, add_special_tokens=False)["input_ids"][:target_tokens]
-    return tokenizer.decode(ids, skip_special_tokens=True)
-
-
-def _make_prompts(tokenizer, targets):
-    return [_make_prompt_of_length(tokenizer, t) for t in targets]
-
-
-def _hf_reference_outputs(model, tokenizer, prompts, max_new_tokens):
-    """Run stock HF generate() per prompt on CPU."""
-    if max_new_tokens == 0:
-        return ["" for _ in prompts]
-    results = []
-    for prompt in prompts:
-        encoded = tokenizer(prompt, return_tensors="pt")
-        with torch.no_grad():
-            out = model.generate(
-                **encoded, max_new_tokens=max_new_tokens, do_sample=False
-            )
-        new_ids = out[0][encoded["input_ids"].shape[1] :]
-        results.append(tokenizer.decode(new_ids, skip_special_tokens=True))
-    return results
-
-
-def _greedy_token_ids(model, tokenizer, prompt, max_new_tokens):
-    encoded = tokenizer(prompt, return_tensors="pt")
-    with torch.no_grad():
-        out = model.generate(**encoded, max_new_tokens=max_new_tokens, do_sample=False)
-    return out[0][encoded["input_ids"].shape[1] :].tolist()
-
-
-class _EosOverrideTokenizer:
-    """Forwards everything to a real tokenizer except ``eos_token_id``."""
-
-    def __init__(self, base, eos_token_id):
-        self._base = base
-        self.eos_token_id = eos_token_id
-
-    def __call__(self, *args, **kwargs):
-        return self._base(*args, **kwargs)
-
-    def decode(self, *args, **kwargs):
-        return self._base.decode(*args, **kwargs)
-
-    def __getattr__(self, name):
-        return getattr(self._base, name)
-
-
-def _pick_forced_eos_id(per_prompt_ids, eos_offsets):
-    """Find a token id that is at offset[b] in row b for every row, and is not
-    present at any earlier position. Returns None if no such token exists.
-    """
-    if any(off >= len(ids) for ids, off in zip(per_prompt_ids, eos_offsets)):
-        return None
-    candidates = {per_prompt_ids[0][eos_offsets[0]]}
-    for b in range(1, len(per_prompt_ids)):
-        candidates &= {per_prompt_ids[b][eos_offsets[b]]}
-    for cand in candidates:
-        if all(
-            cand not in per_prompt_ids[b][: eos_offsets[b]]
-            for b in range(len(per_prompt_ids))
-        ):
-            return cand
-    return None
+CASES = {k: ALL_CASES[k] for k in SPYRE_CASE_KEYS}
+EOS_CASES = {k: ALL_EOS_CASES[k] for k in SPYRE_EOS_CASE_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +92,7 @@ def run_model(model_key):
 
     # --- Reference: HF stock generate() on CPU, BEFORE patching ---
     # The RMSNorm patch and Spyre move are global, so we capture every
-    # reference now and reuse them. Per-case targets are deduped to avoid
-    # re-running the same prompt list multiple times.
+    # reference now and reuse them.
     print("  Capturing HF references on CPU ...")
     ref_dtype = torch.float32 if info.get("dtype") == "float32" else torch.float16
     ref_model = AutoModelForCausalLM.from_pretrained(
@@ -176,10 +103,10 @@ def run_model(model_key):
 
     case_refs = {}
     for case_id, (targets, max_new) in CASES.items():
-        prompts = _make_prompts(tokenizer, targets)
+        prompts = make_prompts(tokenizer, targets)
         case_refs[case_id] = (
             prompts,
-            _hf_reference_outputs(ref_model, tokenizer, prompts, max_new),
+            hf_reference_outputs(ref_model, tokenizer, prompts, max_new),
         )
 
     # For EOS cases, capture the per-prompt greedy token streams so we can
@@ -187,15 +114,15 @@ def run_model(model_key):
     eos_refs = {}
     for case_id, (eos_offsets, max_new) in EOS_CASES.items():
         batch_size = len(eos_offsets)
-        prompts = _make_prompts(tokenizer, [5] * batch_size)
+        prompts = make_prompts(tokenizer, [5] * batch_size)
         per_prompt_ids = [
-            _greedy_token_ids(ref_model, tokenizer, p, max_new) for p in prompts
+            greedy_token_ids(ref_model, tokenizer, p, max_new) for p in prompts
         ]
         eos_refs[case_id] = (prompts, per_prompt_ids)
 
     # Sampling-determinism reference: only need prompts, no HF reference (we
     # compare adapter-vs-adapter at fixed seeds).
-    sampling_prompts = _make_prompts(tokenizer, [8, 16])
+    sampling_prompts = make_prompts(tokenizer, [8, 16])
 
     del ref_model
     gc.collect()
@@ -235,7 +162,7 @@ def run_model(model_key):
 
     # --- max_new_tokens=0 (locks in empty-output contract) ---
     try:
-        prompts = _make_prompts(tokenizer, [5, 12])
+        prompts = make_prompts(tokenizer, [5, 12])
         out = model.generate(tokenizer, prompts, max_new_tokens=0, do_sample=False)
         ok = len(out) == len(prompts) and all(s == "" for s in out)
         rows.append(
@@ -260,7 +187,7 @@ def run_model(model_key):
     # --- Forced EOS cases ---
     for case_id, (eos_offsets, max_new) in EOS_CASES.items():
         prompts, per_prompt_ids = eos_refs[case_id]
-        eos_id = _pick_forced_eos_id(per_prompt_ids, eos_offsets)
+        eos_id = pick_forced_eos_id(per_prompt_ids, eos_offsets)
         if eos_id is None:
             rows.append(
                 {
@@ -277,7 +204,7 @@ def run_model(model_key):
             )
             for b in range(len(prompts))
         ]
-        wrapped = _EosOverrideTokenizer(tokenizer, eos_id)
+        wrapped = EosOverrideTokenizer(tokenizer, eos_id)
         try:
             t0 = time.time()
             out = model.generate(
