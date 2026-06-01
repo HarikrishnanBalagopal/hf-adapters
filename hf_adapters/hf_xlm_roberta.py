@@ -36,6 +36,7 @@ import torch
 from hf_adapters.hf_bert import _make_compiled_encoder_block
 from hf_adapters.hf_common import (
     BLOCK_SIZE,
+    DEVICE,
     get_backbone,
     pad_attention_heads_simple,
 )
@@ -50,10 +51,16 @@ def _xlm_roberta_position_ids(
     position_embeddings lookup matches stock HF exactly. Padding slots map to
     ``padding_idx`` (e.g. 1 for bge-m3); the attention mask zeros them out
     later, so the embedding picked there is irrelevant.
+
+    Computed on CPU even when ``input_ids`` lives on Spyre: the natural form
+    ``input_ids.ne(padding_idx).int()`` materializes a bool tensor and the
+    Spyre Inductor backend rejects ``bool → int32`` conversions. The CPU
+    round-trip on a ``[B, L]`` int tensor is negligible.
     """
-    mask = input_ids.ne(padding_idx).int()
+    ids_cpu = input_ids.to("cpu")
+    mask = ids_cpu.ne(padding_idx).int()
     incremental = torch.cumsum(mask, dim=1).type_as(mask) * mask
-    return incremental.long() + padding_idx
+    return (incremental.long() + padding_idx).to(DEVICE)
 
 
 def _run_backbone_forward(model, input_ids, attn_mask, position_ids, token_type_ids):
