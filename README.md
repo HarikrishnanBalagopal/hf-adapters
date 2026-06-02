@@ -65,7 +65,6 @@ embeddings = model.encode(["hello world", "how are you"])
 ```
 
 The `st_backend` module automatically patches `sentence-transformers` to apply the relevant Spyre adapter when loading the model. All standard SentenceTransformer methods (`encode()`, `similarity()`, etc.) work unchanged.
-Currently just decoder-only models are supported.
 
 ## Repo Structure
 
