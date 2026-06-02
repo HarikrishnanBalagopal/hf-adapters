@@ -54,11 +54,18 @@ from _generate_edge_case_helpers import (
     EOS_CASES as ALL_EOS_CASES,
 )
 from _generate_edge_case_helpers import (
+    SAMPLING_KWARGS,
+    SAMPLING_MAX_NEW,
+    SAMPLING_TARGETS,
     SPYRE_CASE_KEYS,
     SPYRE_EOS_CASE_KEYS,
     EosOverrideTokenizer,
+    NoEosTokenizer,
+    NoPadTokenizer,
+    forced_eos_expected,
     greedy_token_ids,
     hf_reference_outputs,
+    make_prompt_with_eos_inside,
     make_prompts,
     pick_forced_eos_id,
 )
@@ -66,7 +73,6 @@ from model_registry import CAUSAL_LM_MODELS
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from hf_adapters import AutoSpyreModelForCausalLM
-from hf_adapters.hf_common import BLOCK_SIZE
 
 MODELS = CAUSAL_LM_MODELS
 
@@ -122,7 +128,51 @@ def run_model(model_key):
 
     # Sampling-determinism reference: only need prompts, no HF reference (we
     # compare adapter-vs-adapter at fixed seeds).
-    sampling_prompts = make_prompts(tokenizer, [8, 16])
+    sampling_prompts = make_prompts(tokenizer, SAMPLING_TARGETS)
+
+    # No-EOS reference: HF run with eos_token_id=None so it goes the full
+    # max_new_tokens; the adapter side wraps the tokenizer with NoEosTokenizer.
+    no_eos_prompts = make_prompts(tokenizer, [5, 12])
+    no_eos_max_new = 64 + 7  # cross a block boundary (BLOCK_SIZE=64)
+    no_eos_refs = []
+    for prompt in no_eos_prompts:
+        encoded = tokenizer(prompt, return_tensors="pt")
+        with torch.no_grad():
+            out = ref_model.generate(
+                **encoded,
+                max_new_tokens=no_eos_max_new,
+                do_sample=False,
+                eos_token_id=None,
+                pad_token_id=(
+                    tokenizer.pad_token_id
+                    if tokenizer.pad_token_id is not None
+                    else tokenizer.eos_token_id
+                ),
+            )
+        new_ids = out[0][encoded["input_ids"].shape[1] :]
+        no_eos_refs.append(tokenizer.decode(new_ids, skip_special_tokens=True))
+
+    # No-pad-token reference: same prompts as a normal mixed batch; the
+    # adapter side wraps with NoPadTokenizer so generate() takes the
+    # ``pad_token = eos_token`` fallback at the top of the function.
+    no_pad_prompts = make_prompts(tokenizer, [5, 12])
+    no_pad_max_new = 16
+    no_pad_refs = hf_reference_outputs(
+        ref_model, tokenizer, no_pad_prompts, no_pad_max_new
+    )
+
+    # EOS-inside-prompt reference: a single prompt with the model's eos_token_id
+    # embedded mid-sequence; the adapter must NOT mistake it for an emission.
+    eos_in_prompt_refs = None
+    eos_in_prompt = None
+    eos_in_prompt_max_new = 64 + 8
+    if tokenizer.eos_token_id is not None:
+        eos_in_prompt = make_prompt_with_eos_inside(
+            tokenizer, tokenizer.eos_token_id, target_tokens=12
+        )
+        eos_in_prompt_refs = hf_reference_outputs(
+            ref_model, tokenizer, [eos_in_prompt], eos_in_prompt_max_new
+        )
 
     del ref_model
     gc.collect()
@@ -198,12 +248,7 @@ def run_model(model_key):
                 }
             )
             continue
-        expected = [
-            tokenizer.decode(
-                per_prompt_ids[b][: eos_offsets[b]], skip_special_tokens=True
-            )
-            for b in range(len(prompts))
-        ]
+        expected = forced_eos_expected(per_prompt_ids, eos_offsets, tokenizer)
         wrapped = EosOverrideTokenizer(tokenizer, eos_id)
         try:
             t0 = time.time()
@@ -234,8 +279,8 @@ def run_model(model_key):
 
     # --- Sampling determinism (same seed -> equal; different seed -> differ) ---
     try:
-        sampling_kwargs = dict(do_sample=True, temperature=1.0, top_k=20)
-        max_new = BLOCK_SIZE + 4
+        sampling_kwargs = SAMPLING_KWARGS
+        max_new = SAMPLING_MAX_NEW
 
         torch.manual_seed(1234)
         a1 = model.generate(
@@ -268,6 +313,133 @@ def run_model(model_key):
                 "detail": "",
             }
         )
+
+    # --- eos_token_id is None: full-budget generation, no early stop ---
+    try:
+        wrapped = NoEosTokenizer(tokenizer)
+        t0 = time.time()
+        out = model.generate(
+            wrapped, no_eos_prompts, max_new_tokens=no_eos_max_new, do_sample=False
+        )
+        elapsed = time.time() - t0
+        ok = all(hf.strip() == sp.strip() for hf, sp in zip(no_eos_refs, out))
+        rows.append(
+            {
+                "case": "no_eos_runs_full_budget",
+                "status": "PASS" if ok else "FAIL",
+                "elapsed_s": elapsed,
+                "detail": "" if ok else f"hf={no_eos_refs!r} spyre={out!r}",
+            }
+        )
+    except Exception:
+        traceback.print_exc()
+        rows.append(
+            {
+                "case": "no_eos_runs_full_budget",
+                "status": "ERROR",
+                "elapsed_s": 0.0,
+                "detail": "",
+            }
+        )
+
+    # --- pad_token is None: ``pad_token = eos_token`` fallback ---
+    try:
+        wrapped = NoPadTokenizer(tokenizer)
+        t0 = time.time()
+        out = model.generate(
+            wrapped, no_pad_prompts, max_new_tokens=no_pad_max_new, do_sample=False
+        )
+        elapsed = time.time() - t0
+        ok = all(hf.strip() == sp.strip() for hf, sp in zip(no_pad_refs, out))
+        rows.append(
+            {
+                "case": "no_pad_token_fallback",
+                "status": "PASS" if ok else "FAIL",
+                "elapsed_s": elapsed,
+                "detail": "" if ok else f"hf={no_pad_refs!r} spyre={out!r}",
+            }
+        )
+    except Exception:
+        traceback.print_exc()
+        rows.append(
+            {
+                "case": "no_pad_token_fallback",
+                "status": "ERROR",
+                "elapsed_s": 0.0,
+                "detail": "",
+            }
+        )
+
+    # --- top_k=0 sampling: skip the top-k filter branch ---
+    try:
+        kwargs = dict(do_sample=True, temperature=1.0, top_k=0)
+        torch.manual_seed(2024)
+        out1 = model.generate(
+            tokenizer, sampling_prompts, max_new_tokens=SAMPLING_MAX_NEW, **kwargs
+        )
+        torch.manual_seed(2024)
+        out2 = model.generate(
+            tokenizer, sampling_prompts, max_new_tokens=SAMPLING_MAX_NEW, **kwargs
+        )
+        ok = out1 == out2 and all(s for s in out1)
+        rows.append(
+            {
+                "case": "sampling_top_k_zero",
+                "status": "PASS" if ok else "FAIL",
+                "elapsed_s": 0.0,
+                "detail": "" if ok else f"out1={out1!r} out2={out2!r}",
+            }
+        )
+    except Exception:
+        traceback.print_exc()
+        rows.append(
+            {
+                "case": "sampling_top_k_zero",
+                "status": "ERROR",
+                "elapsed_s": 0.0,
+                "detail": "",
+            }
+        )
+
+    # --- EOS id inside the prompt: must NOT be mistaken for an emission ---
+    if eos_in_prompt is None:
+        rows.append(
+            {
+                "case": "eos_inside_prompt",
+                "status": "SKIP",
+                "elapsed_s": 0.0,
+                "detail": "tokenizer has no eos_token_id",
+            }
+        )
+    else:
+        try:
+            t0 = time.time()
+            out = model.generate(
+                tokenizer,
+                [eos_in_prompt],
+                max_new_tokens=eos_in_prompt_max_new,
+                do_sample=False,
+            )
+            elapsed = time.time() - t0
+            ok = eos_in_prompt_refs[0].strip() == out[0].strip()
+            rows.append(
+                {
+                    "case": "eos_inside_prompt",
+                    "status": "PASS" if ok else "FAIL",
+                    "elapsed_s": elapsed,
+                    "detail": "" if ok else f"hf={eos_in_prompt_refs!r} spyre={out!r}",
+                }
+            )
+        except Exception:
+            traceback.print_exc()
+            rows.append(
+                {
+                    "case": "eos_inside_prompt",
+                    "status": "ERROR",
+                    "elapsed_s": 0.0,
+                    "detail": "",
+                }
+            )
 
     del model
     gc.collect()
