@@ -45,8 +45,6 @@ from hf_adapters.hf_common import (
     prefill_encoder,
 )
 
-DEVICE = "spyre"
-
 # Mixed-length prompts: short / medium / long. Forces a non-trivial padding
 # pattern in the right-padded mask so that a broken bidirectional SDPA path
 # would surface as NaN or per-token cosine drop.
