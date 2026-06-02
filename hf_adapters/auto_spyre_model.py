@@ -47,12 +47,14 @@ from transformers import (
     GraniteMoeHybridConfig,
     LlamaConfig,
     MistralConfig,
+    MPNetConfig,
     Olmo2Config,
     OlmoConfig,
     Phi3Config,
     Qwen2Config,
     Qwen3Config,
     SmolLM3Config,
+    XLMRobertaConfig,
 )
 from transformers.configuration_utils import PretrainedConfig
 
@@ -63,12 +65,14 @@ from hf_adapters import (
     hf_granitemoehybrid,
     hf_llama,
     hf_mistral,
+    hf_mpnet,
     hf_olmo,
     hf_olmo2,
     hf_phi3,
     hf_qwen2,
     hf_qwen3,
     hf_smollm3,
+    hf_xlm_roberta,
 )
 from hf_adapters.hf_common import load_model_common
 
@@ -79,12 +83,14 @@ CONFIG_TO_ADAPTER_MODULE_MAPPING: dict[type[PretrainedConfig], ModuleType] = {
     GraniteMoeHybridConfig: hf_granitemoehybrid,
     LlamaConfig: hf_llama,
     MistralConfig: hf_mistral,
+    MPNetConfig: hf_mpnet,
     OlmoConfig: hf_olmo,
     Olmo2Config: hf_olmo2,
     Phi3Config: hf_phi3,
     Qwen2Config: hf_qwen2,
     Qwen3Config: hf_qwen3,
     SmolLM3Config: hf_smollm3,
+    XLMRobertaConfig: hf_xlm_roberta,
 }
 
 
