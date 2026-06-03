@@ -60,8 +60,6 @@ from _generate_edge_case_helpers import (
     SAMPLING_TARGETS,
     SPYRE_CASE_KEYS,
     SPYRE_EOS_CASE_KEYS,
-    EosOverrideTokenizer,
-    NoEosTokenizer,
     NoPadTokenizer,
     forced_eos_expected,
     greedy_token_ids,
@@ -138,7 +136,7 @@ def run_model(model_key):
     sampling_prompts = make_prompts(tokenizer, SAMPLING_TARGETS)
 
     # No-EOS reference: HF run with eos_token_id=None so it goes the full
-    # max_new_tokens; the adapter side wraps the tokenizer with NoEosTokenizer.
+    # max_new_tokens; the adapter side passes the same eos_token_id=None.
     no_eos_prompts = make_prompts(tokenizer, [5, 12])
     no_eos_max_new = 64 + 7  # cross a block boundary (BLOCK_SIZE=64)
     no_eos_refs = []
@@ -266,11 +264,14 @@ def run_model(model_key):
             )
             continue
         expected = forced_eos_expected(per_prompt_ids, eos_offsets, tokenizer)
-        wrapped = EosOverrideTokenizer(tokenizer, eos_id)
         try:
             t0 = time.time()
             out = model.generate(
-                wrapped, prompts, max_new_tokens=max_new, do_sample=False
+                tokenizer,
+                prompts,
+                max_new_tokens=max_new,
+                do_sample=False,
+                eos_token_id=eos_id,
             )
             elapsed = time.time() - t0
         except Exception:
@@ -341,10 +342,13 @@ def run_model(model_key):
     # --- eos_token_id is None: full-budget generation, no early stop ---
     print("  Running no-EOS full-budget case ...")
     try:
-        wrapped = NoEosTokenizer(tokenizer)
         t0 = time.time()
         out = model.generate(
-            wrapped, no_eos_prompts, max_new_tokens=no_eos_max_new, do_sample=False
+            tokenizer,
+            no_eos_prompts,
+            max_new_tokens=no_eos_max_new,
+            do_sample=False,
+            eos_token_id=None,
         )
         elapsed = time.time() - t0
         ok = all(hf.strip() == sp.strip() for hf, sp in zip(no_eos_refs, out))

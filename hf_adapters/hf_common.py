@@ -734,6 +734,9 @@ def load_model_common(model_path, prepare_fn, dtype=torch.float16, auto_model_cl
 # Generation-parameter resolution
 # ---------------------------------------------------------------------------
 
+# Sentinel distinguishing "argument not passed" from an explicit ``None``.
+_UNSET = object()
+
 
 def _normalize_eos_ids(eos):
     """Normalize an EOS spec to a 1-D long tensor of ids, or ``None``.
@@ -761,19 +764,22 @@ def _resolve_generation_params(model, tokenizer, overrides):
     """Resolve sampling + stop params via HF's ``_prepare_generation_config``.
 
     Precedence matches stock HF: ``explicit kwarg > model.generation_config >
-    HF global defaults``. ``None`` overrides are dropped so HF fills them.
-    Length is not resolved here — ``max_new_tokens`` is a required argument to
-    ``generate()``. EOS is normalized to a tensor, falling back to the
-    tokenizer when the config carries none.
+    HF global defaults``. Parameters with ``None`` are dropped so HF
+    fills them. EOS is normalized to a tensor.
 
     Returns a dict with keys ``do_sample, temperature, top_k, top_p`` plus
     ``eos_ids`` (a long tensor or ``None``).
     """
-    explicit = {k: v for k, v in overrides.items() if v is not None}
+    eos_specified = "eos_token_id" in overrides
+    explicit = {
+        k: v for k, v in overrides.items() if k == "eos_token_id" or v is not None
+    }
     cfg, _ = model._prepare_generation_config(None, **explicit)
 
     eos = cfg.eos_token_id
-    if eos is None:
+    # Fall back to the tokenizer only when EOS was unspecified — an explicit
+    # eos_token_id=None means "disable EOS" and must not be re-enabled.
+    if eos is None and not eos_specified:
         eos = getattr(tokenizer, "eos_token_id", None)
 
     return {
@@ -795,15 +801,15 @@ def generate(
     temperature=None,
     top_k=None,
     top_p=None,
-    eos_token_id=None,
+    eos_token_id=_UNSET,
     timing=False,
 ):
     """Model-agnostic generation with padded 64-block decode.
 
     Sampling and stop parameters follow stock-HF precedence:
-    ``explicit kwarg > model.generation_config > HF global default``. Passing
-    ``None`` (the default for ``do_sample``/``temperature``/``top_k``/``top_p``/
-    ``eos_token_id``) means "not specified" and defers to the model's
+    ``explicit kwarg > model.generation_config > HF global default``. Leaving a
+    sampling knob at ``None`` (the default for ``do_sample``/``temperature``/
+    ``top_k``/``top_p``) means "not specified" and defers to the model's
     ``generation_config``, then to HF defaults — so this matches
     ``model.generate()``. Pass a concrete value to force it regardless of
     config (e.g. ``do_sample=False`` for deterministic greedy on a model whose
@@ -825,21 +831,22 @@ def generate(
         temperature: Sampling temperature.
         top_k: Top-k filtering (0/None disables).
         top_p: Nucleus (top-p) filtering (1.0 disables).
-        eos_token_id: Override stop token(s); scalar or list. Normalized
-            internally; defaults to config/tokenizer eos.
+        eos_token_id: Override stop token(s); scalar or list. Omit to defer to
+            config/tokenizer eos; pass ``None`` to disable EOS stopping (matches
+            stock ``generate()``).
         timing: Print per-token latency.
     """
-    params = _resolve_generation_params(
-        model,
-        tokenizer,
-        {
-            "do_sample": do_sample,
-            "temperature": temperature,
-            "top_k": top_k,
-            "top_p": top_p,
-            "eos_token_id": eos_token_id,
-        },
-    )
+    overrides = {
+        "do_sample": do_sample,
+        "temperature": temperature,
+        "top_k": top_k,
+        "top_p": top_p,
+    }
+    # Include eos_token_id only when actually overridden, so an explicit None
+    # (disable EOS) is distinguishable from "unspecified" (defer to config).
+    if eos_token_id is not _UNSET:
+        overrides["eos_token_id"] = eos_token_id
+    params = _resolve_generation_params(model, tokenizer, overrides)
     do_sample = params["do_sample"]
     temperature = params["temperature"]
     top_k = params["top_k"]
