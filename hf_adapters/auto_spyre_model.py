@@ -33,8 +33,7 @@ A `generate` method is attached to the model that handles the 64-block
 padded decode generation loop.
 """
 
-import types
-from types import ModuleType
+from types import MethodType, ModuleType
 
 import torch
 from transformers import (
@@ -151,6 +150,6 @@ class AutoSpyreModelForCausalLM(AutoSpyreModel):
 
             return generate(module._run_forward, self, tokenizer, prompts, **kwargs)
 
-        model.generate = types.MethodType(model_generate, model)
+        model.generate = MethodType(model_generate, model)
 
         return model

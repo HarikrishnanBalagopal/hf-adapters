@@ -215,7 +215,9 @@ def test_auto_loader(model_key, auto_spyre_model, unwrap_compiled_blocks, load_a
         info["path"], dtype=torch_dtype
     )
     unwrap_compiled_blocks(model)
-    auto_outputs = model.generate(tokenizer, [PROMPT], max_new_tokens=NUM_DECODE)
+    auto_outputs = model.generate(
+        tokenizer, [PROMPT], max_new_tokens=NUM_DECODE, do_sample=False
+    )
     del model
     gc.collect()
 
