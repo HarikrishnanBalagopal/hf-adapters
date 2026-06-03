@@ -43,8 +43,6 @@ from _generate_edge_case_helpers import (
     SAMPLING_KWARGS,
     SAMPLING_MAX_NEW,
     SAMPLING_TARGETS,
-    EosOverrideTokenizer,
-    NoEosTokenizer,
     NoPadTokenizer,
     forced_eos_expected,
     greedy_token_ids,
@@ -243,16 +241,17 @@ def test_generate_forced_eos(
     # Build the expected per-row output: tokens up to (not including) the EOS.
     expected = forced_eos_expected(per_prompt_ids, eos_offsets, tokenizer)
 
-    # Step 2: run the adapter with the override tokenizer.
-    wrapped = EosOverrideTokenizer(tokenizer, eos_token_id)
+    # Step 2: run the adapter, forcing the stop token via the eos_token_id
+    # kwarg (highest-precedence source in generate()'s HF-style resolution).
     adapter_outputs = _run_adapter_generate(
         info,
         adapter_mod,
         hf_common_mod,
         unwrap_compiled_blocks,
-        wrapped,
+        tokenizer,
         prompts,
         max_new_tokens,
+        eos_token_id=eos_token_id,
     )
 
     assert len(adapter_outputs) == batch_size
@@ -358,11 +357,11 @@ def test_generate_sampling_determinism(
 
 
 # ---------------------------------------------------------------------------
-# eos_token_id is None: must run full max_new_tokens with no early stop
+# eos_token_id=None: must run full max_new_tokens with no early stop
 # ---------------------------------------------------------------------------
 #
-# When the tokenizer exposes ``eos_token_id = None`` (line 841 of
-# hf_common.generate), the ``finished`` mask is never set and the decode walk
+# Passing ``eos_token_id=None`` disables EOS stopping (matching stock HF): the
+# resolved eos is None, the ``finished`` mask is never set, and the decode walk
 # does not truncate. The adapter should emit exactly max_new_tokens per row.
 
 
@@ -404,15 +403,16 @@ def test_generate_no_eos_runs_full_budget(
     del ref_model
     gc.collect()
 
-    wrapped = NoEosTokenizer(tokenizer)
+    # eos_token_id=None disables EOS stopping, same as the HF reference above.
     adapter_outputs = _run_adapter_generate(
         info,
         adapter_mod,
         hf_common_mod,
         unwrap_compiled_blocks,
-        wrapped,
+        tokenizer,
         prompts,
         max_new_tokens,
+        eos_token_id=None,
     )
 
     assert len(adapter_outputs) == len(prompts)

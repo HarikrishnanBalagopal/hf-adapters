@@ -176,35 +176,9 @@ def greedy_token_ids(model, tokenizer, prompt, max_new_tokens):
 
 
 # ---------------------------------------------------------------------------
-# Forced EOS — wrap the tokenizer with a chosen eos_token_id, pick a clean one
+# Forced EOS — pick a clean stop token to pass via generate(eos_token_id=...)
 # ---------------------------------------------------------------------------
 #
-# ``hf_common.generate`` reads ``eos_token_id`` off the tokenizer. To force
-# generation to stop at a controlled offset, we override that single attribute
-# while delegating ``__call__`` and ``decode`` to the real tokenizer.
-
-
-class EosOverrideTokenizer:
-    """Forwards everything to a real tokenizer except ``eos_token_id``.
-
-    Defined as its own class (rather than inheriting from
-    ``_DelegatingTokenizer``) so that ``eos_token_id`` is set as an instance
-    attribute and does not collide with the no-EOS subclass's class-level
-    override.
-    """
-
-    def __init__(self, base, eos_token_id):
-        self._base = base
-        self.eos_token_id = eos_token_id
-
-    def __call__(self, *args, **kwargs):
-        return self._base(*args, **kwargs)
-
-    def decode(self, *args, **kwargs):
-        return self._base.decode(*args, **kwargs)
-
-    def __getattr__(self, name):
-        return getattr(self._base, name)
 
 
 def pick_forced_eos_id(per_prompt_ids, eos_offsets):
@@ -247,7 +221,7 @@ def forced_eos_expected(per_prompt_ids, eos_offsets, tokenizer):
 class _DelegatingTokenizer:
     """Forwards ``__call__``/``decode`` and unknown attribute reads to a base
     tokenizer. Subclasses override specific attributes to exercise branches in
-    ``hf_common.generate`` (no EOS id, no pad token).
+    ``hf_common.generate`` (e.g. no pad token).
     """
 
     def __init__(self, base):
@@ -261,17 +235,6 @@ class _DelegatingTokenizer:
 
     def __getattr__(self, name):
         return getattr(self._base, name)
-
-
-class NoEosTokenizer(_DelegatingTokenizer):
-    """Hides ``eos_token_id`` so ``generate()`` takes the no-EOS branches.
-
-    Generation should then run exactly ``max_new_tokens`` steps with no early
-    stop and no EOS truncation in the decode walk.
-    """
-
-    eos_token_id = None
-    eos_token = None
 
 
 class NoPadTokenizer(_DelegatingTokenizer):

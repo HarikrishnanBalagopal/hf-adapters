@@ -730,32 +730,129 @@ def load_model_common(model_path, prepare_fn, dtype=torch.float16, auto_model_cl
     return model
 
 
+# ---------------------------------------------------------------------------
+# Generation-parameter resolution
+# ---------------------------------------------------------------------------
+
+# Sentinel distinguishing "argument not passed" from an explicit ``None``.
+_UNSET = object()
+
+
+def _normalize_eos_ids(eos):
+    """Normalize an EOS spec to a 1-D long tensor of ids, or ``None``.
+
+    Accepts a scalar ``int`` (→ ``[int]``), a list/tuple of ints, an existing
+    tensor, or ``None``. Multi-EOS models (Llama-3, Phi-4, Qwen) carry a list;
+    older models carry a scalar. Returning a tensor lets the decode loop use
+    ``torch.isin`` uniformly instead of ``==`` (which silently collapses to a
+    scalar ``bool`` for lists).
+
+    Mirrors stock HF, which does the same scalar/list/tensor → tensor
+    normalization and ``torch.isin`` stop check in
+    ``transformers.generation.stopping_criteria.EosTokenCriteria``.
+    """
+    if eos is None:
+        return None
+    if not isinstance(eos, torch.Tensor):
+        if isinstance(eos, int):
+            eos = [eos]
+        eos = torch.tensor(eos)
+    return eos
+
+
+def _resolve_generation_params(model, tokenizer, overrides):
+    """Resolve sampling + stop params via HF's ``_prepare_generation_config``.
+
+    Precedence matches stock HF: ``explicit kwarg > model.generation_config >
+    HF global defaults``. Parameters with ``None`` are dropped so HF
+    fills them. EOS is normalized to a tensor.
+
+    Returns a dict with keys ``do_sample, temperature, top_k, top_p`` plus
+    ``eos_ids`` (a long tensor or ``None``).
+    """
+    eos_specified = "eos_token_id" in overrides
+    explicit = {
+        k: v for k, v in overrides.items() if k == "eos_token_id" or v is not None
+    }
+    cfg, _ = model._prepare_generation_config(None, **explicit)
+
+    eos = cfg.eos_token_id
+    # Fall back to the tokenizer only when EOS was unspecified — an explicit
+    # eos_token_id=None means "disable EOS" and must not be re-enabled.
+    if eos is None and not eos_specified:
+        eos = getattr(tokenizer, "eos_token_id", None)
+
+    return {
+        "do_sample": cfg.do_sample,
+        "temperature": cfg.temperature,
+        "top_k": cfg.top_k,
+        "top_p": cfg.top_p,
+        "eos_ids": _normalize_eos_ids(eos),
+    }
+
+
 def generate(
     run_forward_fn: Callable,
     model,
     tokenizer,
     prompts,
-    max_new_tokens=128,
-    do_sample=False,
-    temperature=1.0,
-    top_k=50,
+    max_new_tokens,
+    do_sample=None,
+    temperature=None,
+    top_k=None,
+    top_p=None,
+    eos_token_id=_UNSET,
     timing=False,
 ):
     """Model-agnostic generation with padded 64-block decode.
+
+    Sampling and stop parameters follow stock-HF precedence:
+    ``explicit kwarg > model.generation_config > HF global default``. Leaving a
+    sampling knob at ``None`` (the default for ``do_sample``/``temperature``/
+    ``top_k``/``top_p``) means "not specified" and defers to the model's
+    ``generation_config``, then to HF defaults — so this matches
+    ``model.generate()``. Pass a concrete value to force it regardless of
+    config (e.g. ``do_sample=False`` for deterministic greedy on a model whose
+    config bakes in sampling).
+
+    ``max_new_tokens`` is REQUIRED and is not resolved from config: HF's
+    default length goes through ``max_length`` (total prompt+new), which this
+    decode loop does not implement. Callers must state the new-token budget.
 
     Args:
         run_forward_fn: ``fn(model, input_ids, position_ids, attn_mask,
             key_caches, value_caches, is_filling, token_index,
             cache_position) -> logits``
-        model: Prepared HF model on Spyre.
+        model: Prepared HF model on Spyre (supplies ``generation_config``).
         tokenizer: HF tokenizer.
         prompts: List of prompt strings.
-        max_new_tokens: Max tokens to generate.
+        max_new_tokens: Number of tokens to generate (required).
         do_sample: Sampling vs greedy.
         temperature: Sampling temperature.
-        top_k: Top-k filtering.
+        top_k: Top-k filtering (0/None disables).
+        top_p: Nucleus (top-p) filtering (1.0 disables).
+        eos_token_id: Override stop token(s); scalar or list. Omit to defer to
+            config/tokenizer eos; pass ``None`` to disable EOS stopping (matches
+            stock ``generate()``).
         timing: Print per-token latency.
     """
+    overrides = {
+        "do_sample": do_sample,
+        "temperature": temperature,
+        "top_k": top_k,
+        "top_p": top_p,
+    }
+    # Include eos_token_id only when actually overridden, so an explicit None
+    # (disable EOS) is distinguishable from "unspecified" (defer to config).
+    if eos_token_id is not _UNSET:
+        overrides["eos_token_id"] = eos_token_id
+    params = _resolve_generation_params(model, tokenizer, overrides)
+    do_sample = params["do_sample"]
+    temperature = params["temperature"]
+    top_k = params["top_k"]
+    top_p = params["top_p"]
+    eos_ids = params["eos_ids"]
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     # Force left-padding: with right-padding, shorter sequences end with
@@ -838,7 +935,6 @@ def generate(
     fill_mask_device = None
 
     times_list = []
-    eos_token_id = getattr(tokenizer, "eos_token_id", None)
     finished = torch.zeros(batch_size, dtype=torch.bool)
     num_generated = torch.zeros(batch_size, dtype=torch.long)
 
@@ -928,9 +1024,19 @@ def generate(
         # Token selection (CPU)
         if do_sample:
             scaled = next_logits / temperature
-            if top_k > 0:
+            if top_k and top_k > 0:
                 v, _ = torch.topk(scaled, min(top_k, scaled.size(-1)), dim=-1)
                 scaled[scaled < v[:, -1:]] = -torch.inf
+            if top_p is not None and top_p < 1.0:
+                # Nucleus filter, mirroring HF's TopPLogitsWarper.__call__
+                sorted_logits, sorted_indices = torch.sort(scaled, descending=False)
+                cumulative_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
+                sorted_indices_to_remove = cumulative_probs <= (1 - top_p)
+                sorted_indices_to_remove[..., -1:] = 0  # keep at least one token
+                indices_to_remove = sorted_indices_to_remove.scatter(
+                    1, sorted_indices, sorted_indices_to_remove
+                )
+                scaled = scaled.masked_fill(indices_to_remove, -torch.inf)
             probs = F.softmax(scaled, dim=-1)
             next_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)  # [B]
         else:
@@ -946,8 +1052,8 @@ def generate(
             result = F.pad(result, (0, BLOCK_SIZE))
         grab_idx = (BLOCK_SIZE - tokens_in_block) if tokens_in_block > 0 else BLOCK_SIZE
         result[:, -grab_idx] = next_tokens  # [B]
-        if eos_token_id is not None:
-            finished |= next_tokens == eos_token_id
+        if eos_ids is not None:
+            finished |= torch.isin(next_tokens, eos_ids)
         num_generated += (~finished).long()
 
         if finished.all():
@@ -978,10 +1084,10 @@ def generate(
             remaining -= take
             block_start += BLOCK_SIZE
         gen_ids = torch.tensor(gen_ids_list)
-        if eos_token_id is not None:
-            eos_pos = (gen_ids == eos_token_id).nonzero(as_tuple=True)[0]
+        if eos_ids is not None:
+            eos_pos = torch.isin(gen_ids, eos_ids).nonzero(as_tuple=True)[0]
             if len(eos_pos) > 0:
-                gen_ids = gen_ids[: eos_pos[0].item()]
+                gen_ids = gen_ids[: eos_pos[0].item()]  # type: ignore[misc]
         results.append(tokenizer.decode(gen_ids, skip_special_tokens=True))
 
     return results
