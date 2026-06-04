@@ -35,10 +35,10 @@ Usage (on the Spyre pod)::
 
     # Run all tests for default model (qwen3)
     python3 tests/test_generate_edge_cases_spyre.py
-    
+
     # Run all tests for specific models
     python3 tests/test_generate_edge_cases_spyre.py qwen3 granite2b
-    
+
     # Run only specific test case(s)
     python3 tests/test_generate_edge_cases_spyre.py qwen3 --case short_two_blocks_plus
     python3 tests/test_generate_edge_cases_spyre.py qwen3 --case short_two_blocks_plus single_token_prompt
@@ -103,7 +103,7 @@ EOS_CASES = {k: ALL_EOS_CASES[k] for k in SPYRE_EOS_CASE_KEYS}
 
 def run_model(model_key, case_filter=None):
     """Load one model, run every case (or filtered cases), return a list of result rows.
-    
+
     Args:
         model_key: Key from MODELS registry
         case_filter: Optional list of case names to run. If None, runs all cases.
@@ -211,7 +211,7 @@ def run_model(model_key, case_filter=None):
         cases_to_run = {k: v for k, v in CASES.items() if k in case_filter}
         if not cases_to_run:
             print(f"  No matching greedy cases found for filter: {case_filter}")
-    
+
     print(f"  Running {len(cases_to_run)} greedy correctness cases ...")
     for case_id, (targets, max_new) in cases_to_run.items():
         prompts, hf_outputs = case_refs[case_id]
@@ -538,30 +538,30 @@ if __name__ == "__main__":
 Examples:
   # Run all tests for qwen3 (default)
   python3 tests/test_generate_edge_cases_spyre.py
-  
+
   # Run all tests for specific models
   python3 tests/test_generate_edge_cases_spyre.py qwen3 granite2b
-  
+
   # Run only short_two_blocks_plus test for qwen3
   python3 tests/test_generate_edge_cases_spyre.py qwen3 --case short_two_blocks_plus
-  
+
   # Run multiple specific cases
   python3 tests/test_generate_edge_cases_spyre.py qwen3 --case short_two_blocks_plus single_token_prompt
-        """
+        """,
     )
     parser.add_argument(
         "models",
         nargs="*",
         default=["qwen3"],
-        help=f"Model keys to test. Options: {list(MODELS.keys())}. Default: qwen3"
+        help=f"Model keys to test. Options: {list(MODELS.keys())}. Default: qwen3",
     )
     parser.add_argument(
         "--case",
         nargs="+",
         dest="cases",
-        help=f"Run only specific test cases. Options: {list(CASES.keys())}"
+        help=f"Run only specific test cases. Options: {list(CASES.keys())}",
     )
-    
+
     args = parser.parse_args()
     which = args.models
     case_filter = args.cases
