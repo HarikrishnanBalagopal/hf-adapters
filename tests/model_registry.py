@@ -127,6 +127,16 @@ EMBEDDING_MODELS = {
         "path": "intfloat/e5-mistral-7b-instruct",
         "adapter": "hf_mistral.py",
     },
+    "linq_embed_mistral": {
+        "name": "Linq-Embed-Mistral",
+        "path": "Linq-AI-Research/Linq-Embed-Mistral",
+        "adapter": "hf_mistral.py",
+    },
+    "sfr_embedding_mistral": {
+        "name": "SFR-Embedding-Mistral",
+        "path": "Salesforce/SFR-Embedding-Mistral",
+        "adapter": "hf_mistral.py",
+    },
     "bge_base": {
         "name": "BGE-base-en-v1.5",
         "path": "BAAI/bge-base-en-v1.5",
