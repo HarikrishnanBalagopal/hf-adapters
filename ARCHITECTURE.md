@@ -40,6 +40,8 @@ Use `st_backend` for the sentence-transformers API, or call `prefill_embed` / `p
 | Qwen3-Embedding 0.6B | qwen3 | 128 | Yes | Yes | Yes | Yes |
 | GTE-Qwen2-1.5B | qwen2 | 128 | Yes | Yes | Yes | Yes (accuracy diverges from CPU) |
 | E5-Mistral-7B | mistral | 128 | Yes | Yes | Yes | Yes (accuracy diverges from CPU) |
+| Linq-Embed-Mistral | mistral | 128 | Yes | Yes | Yes | Yes (accuracy diverges from CPU) |
+| SFR-Embedding-Mistral | mistral | 128 | Yes | Yes | Yes | Yes (accuracy diverges from CPU) |
 | BGE-base-en-v1.5 | bert | 64 | Yes | Yes | Yes | Yes |
 | all-MiniLM-L6-v2 | bert | 32→64 | Yes (padded) | Yes | Yes | Yes |
 | BGE-M3 | xlm-roberta | 64 | Yes | Yes | Yes | Yes |
@@ -49,7 +51,7 @@ Use `st_backend` for the sentence-transformers API, or call `prefill_embed` / `p
 | Granite-Embedding-97m-multilingual-r2 | modernbert | 32→128 | Yes (padded) | Yes | Yes | Yes |
 
 **CPU Accurate** = adapter hidden-states have cosine similarity ≥ 0.9999 vs stock HF on CPU.
-**Spyre Compiles / Spyre Runs** = via `test_e2e_embed_compare_spyre.py`. GTE-Qwen2 and E5-Mistral compile and execute end-to-end on Spyre but their pooled embeddings drift from the CPU reference; the Qwen3/BERT/XLM-RoBERTa/MPNet/ModernBERT encoder paths match within fp16 noise.
+**Spyre Compiles / Spyre Runs** = via `test_e2e_embed_compare_spyre.py`. GTE-Qwen2 and the Mistral-backbone embedding models (E5-Mistral, Linq-Embed-Mistral, SFR-Embedding-Mistral) compile and execute end-to-end on Spyre but their pooled embeddings drift from the CPU reference; the Qwen3/BERT/XLM-RoBERTa/MPNet/ModernBERT encoder paths match within fp16 noise.
 
 ### Spyre Numerical Accuracy (torch-spyre @ 7c6ef99)
 
