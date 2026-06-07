@@ -2,10 +2,10 @@
 
 import os
 import sys
+from pathlib import Path
 
+from hf_model_catalog import EXPAND_FIELDS, RESOURCES_DIR, build_catalog
 from huggingface_hub import HfApi
-
-from utils.hf_model_catalog import EXPAND_FIELDS, build_catalog
 
 
 def _fetch(api, limit):
@@ -26,7 +26,9 @@ def _keep(model):
     return bool(model.config) and model.library_name not in ("gguf", "mlx")
 
 
-def fetch_top_generative_models(limit, output_csv="top_generative_models.csv"):
+def fetch_top_generative_models(limit, output_csv: Path | str | None = None):
+    if output_csv is None:
+        output_csv = RESOURCES_DIR / "top_generative_models.csv"
     token = os.environ.get("HF_TOKEN", True)
     api = HfApi(token=token)
     build_catalog(

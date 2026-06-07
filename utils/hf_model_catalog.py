@@ -10,12 +10,16 @@ columns* it wants on top of the shared schema.
 import csv
 import re
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from tqdm import tqdm
 from transformers import AutoConfig
 
 # Import the mapping to get supported config classes dynamically
 from hf_adapters.auto_spyre_model import CONFIG_TO_ADAPTER_MODULE_MAPPING
+
+# Get the resources directory (parent of resources/__init__.py)
+RESOURCES_DIR = Path(__file__).resolve().parent.parent / "resources"
 
 # Metadata fields requested from list_models for every fetcher.
 EXPAND_FIELDS = [

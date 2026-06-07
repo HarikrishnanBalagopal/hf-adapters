@@ -21,10 +21,10 @@ jina-embeddings-v5-omni, ...) are kept but flagged via ``is_multimodal``.
 
 import os
 import sys
+from pathlib import Path
 
+from hf_model_catalog import EXPAND_FIELDS, RESOURCES_DIR, build_catalog, tags
 from huggingface_hub import HfApi
-
-from utils.hf_model_catalog import EXPAND_FIELDS, build_catalog, tags
 
 # Pipeline tags that embedding models are filed under. They are mutually
 # exclusive (one primary tag per model), so we query both and union.
@@ -131,7 +131,9 @@ def _keep(model):
     return True
 
 
-def fetch_top_embedding_models(limit, output_csv="top_embedding_models.csv"):
+def fetch_top_embedding_models(limit, output_csv: Path | str | None = None):
+    if output_csv is None:
+        output_csv = RESOURCES_DIR / "top_embedding_models.csv"
     token = os.environ.get("HF_TOKEN", True)
     api = HfApi(token=token)
     build_catalog(
