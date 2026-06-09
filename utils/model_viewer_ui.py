@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from hf_model_catalog import RESOURCES_DIR
 from nicegui import ui
@@ -84,7 +84,7 @@ class ModelDataViewer:
         self.csv_path = csv_path
         self.all_data: List[Dict[str, Any]] = []
         self.columns: List[str] = []
-        self.unique_values: Dict[str, Set[str]] = {}
+        self.unique_values: Dict[str, List[str]] = {}
 
         # Use immutable filter state with thread-safe access
         self._filter_state = FilterState()
@@ -158,14 +158,18 @@ class ModelDataViewer:
         return True
 
     def _extract_unique_values(self):
-        """Extract unique values for each column for filter dropdowns."""
+        """Extract unique values for each column for filter dropdowns.
+
+        Stored as a case-insensitively sorted list so the select dropdowns
+        display options alphabetically.
+        """
         for column in self.columns:
             values = set()
             for row in self.all_data:
                 value = row.get(column, "")
                 if value:  # Only add non-empty values
                     values.add(str(value))
-            self.unique_values[column] = set(sorted(values))
+            self.unique_values[column] = sorted(values, key=str.casefold)
 
     def apply_filters(self) -> List[Dict[str, Any]]:
         """Apply current filters to data. Returns NEW filtered list (immutable)."""
