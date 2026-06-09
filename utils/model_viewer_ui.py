@@ -657,6 +657,7 @@ def create_filter_panel_lazy(
                         value=default or None,
                         multiple=True,
                         clearable=True,
+                        with_input=True,
                         on_change=lambda e, f=field: update_filter(f, e.value),
                     ).classes("w-full").props("use-chips")
 
