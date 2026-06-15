@@ -1,4 +1,4 @@
-name: test_each_commit
+name: test_pull_request
 
 on:
   push:
@@ -50,8 +50,35 @@ env:
   CLONED_HF_ADAPTERS_DIR: ${{ github.workspace }}
   STORAGE_1_DIR: /storage-1/hf-adapaters
   HF_HOME: /storage-1/hf-adapaters/.cache/huggingface
+  # Single source of truth for the set of models exercised by the CPU
+  # test matrix's `-k` filter. Add a model here to include it in PR runs.
+  MODELS_FILTER: "qwen3 or granite or granite2b or granite4 or bge_base or bge_m3"
 
 jobs:
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+        with:
+          # Skip the local mypy hook — it requires the project venv with
+          # torch/transformers installed, which we don't set up in this lint job.
+          extra_args: --all-files --hook-stage commit --show-diff-on-failure
+        env:
+          SKIP: mypy
+
   cpu-tests:
     name: CPU tests (${{ matrix.test_file }})
     runs-on:
@@ -62,12 +89,14 @@ jobs:
     timeout-minutes: 120
     strategy:
       matrix:
+        # Tests marked `@pytest.mark.slow` are dropped from PR runs (see the
+        # `-m "not slow"` flag below) and instead exercised by the weekly cron.
         test_file:
           - test_load_cpu.py
           - test_adapter_cpu_accuracy.py
           - test_embed_cpu_accuracy.py
-          # test_generate_edge_cases_cpu.py moved to weekly workflow
-          - test_multibatch_generate.py
+          - test_generate_edge_cases_cpu.py
+          - test_multibatch_generate_cpu.py
           - test_st_backend_cpu.py
 
     steps:
@@ -97,7 +126,7 @@ jobs:
           source /etc/profile.d/ibm-aiu-setup.sh
           cd "$CLONED_HF_ADAPTERS_DIR"
           echo "Running ${{ matrix.test_file }}..."
-          uv run pytest -s -vvv -k "qwen3 or granite or granite2b or granite4 or bge_base or bge_m3" "tests/${{ matrix.test_file }}"
+          uv run pytest -s -vvv -m "not slow" -k "$MODELS_FILTER" "tests/${{ matrix.test_file }}"
           echo "tests done"
 
   spyre-load-tests:
@@ -367,6 +396,7 @@ jobs:
       run:
         working-directory: .
     needs:
+      - pre-commit
       - cpu-tests
       - spyre-load-tests
       - spyre-smoke-tests
@@ -377,7 +407,8 @@ jobs:
     steps:
       - name: Check all suites passed
         run: |-
-          if ${{ contains(needs.cpu-tests.result, 'failure') || contains(needs.cpu-tests.result, 'cancelled') ||
+          if ${{ contains(needs.pre-commit.result, 'failure') || contains(needs.pre-commit.result, 'cancelled') ||
+                 contains(needs.cpu-tests.result, 'failure') || contains(needs.cpu-tests.result, 'cancelled') ||
                  contains(needs.spyre-load-tests.result, 'failure') || contains(needs.spyre-load-tests.result, 'cancelled') ||
                  contains(needs.spyre-smoke-tests.result, 'failure') || contains(needs.spyre-smoke-tests.result, 'cancelled') ||
                  contains(needs.spyre-token-compare-tests.result, 'failure') || contains(needs.spyre-token-compare-tests.result, 'cancelled') ||
