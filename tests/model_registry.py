@@ -148,6 +148,14 @@ CAUSAL_LM_MODELS = {
         "load_fn": True,
         "size": "24b",
     },
+    "ministral3": {
+        "name": "Ministral-3-14B-Instruct-2512",
+        "path": "mistralai/Ministral-3-14B-Instruct-2512",
+        "adapter": "hf_mistral3.py",
+        "load_fn": True,
+        "dtype": "bfloat16",
+        "size": "14b",
+    },
     # hf_olmo.py
     "olmo1b": {
         "name": "OLMo 1B",
