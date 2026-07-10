@@ -53,5 +53,9 @@ runs:
           echo "--- repo listing ---"
           echo "TORCH_SPYRE_DIR $TORCH_SPYRE_DIR"
           ls -lart "$TORCH_SPYRE_DIR" || true
+          if [[ -d "$TORCH_SPYRE_DIR" ]]; then
+            echo "--- torch-spyre HEAD ---"
+            git -C "$TORCH_SPYRE_DIR" log -n 1 --oneline || true
+          fi
         fi
         echo "================================="
