@@ -27,12 +27,20 @@ import sys
 import time
 import traceback as _traceback
 from asyncio import Queue
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+
+from huggingface_hub.errors import HfHubHTTPError
 
 from tests.spyre.weekly_generation.result_sink import (
     EmbeddingGenerativeMode,
 )
+
+
+def _ts() -> str:
+    """Local-time timestamp prefix, e.g. '[2026-07-17 14:32:05]'."""
+    return datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+
 
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
@@ -71,7 +79,7 @@ _WEIGHT_SUFFIXES = (
 # amortize per-child spawn + import + kernel-teardown cost (~15 s currently)
 # across more work. Lower values reduce the blast radius when the Spyre
 # driver/state gets into a bad shape mid-batch.
-GENERATIVE_NUMBER_OF_MODEL_PER_PROCESS: int = 25
+GENERATIVE_NUMBER_OF_MODEL_PER_PROCESS: int = 2
 EMBEDDING_NUMBER_OF_MODEL_PER_PROCESS: int = 90
 
 
@@ -169,7 +177,16 @@ def _temp_random_bool() -> bool:
     return random.choice([True, False])
 
 
-def _load_on_cpu(model_path: str, mode: EmbeddingGenerativeMode) -> bool:
+def _load_on_cpu(
+    model_path: str, mode: EmbeddingGenerativeMode
+) -> tuple[bool, str | None]:
+    """Try to load *model_path* on CPU. Returns ``(loaded, error_message)``.
+
+    ``error_message`` is ``None`` on success. On failure it carries a
+    ``"ExcType: message\\n<tail traceback>"`` string that the caller can
+    stash into the row's ``error`` field. Transient HF 5xx propagate — the
+    driver retries at a higher level.
+    """
     import hf_adapters.hf_common as _hf_common
     from hf_adapters import AutoSpyreModelForCausalLM
     from hf_adapters.auto_spyre_model import AutoSpyreModel
@@ -188,10 +205,23 @@ def _load_on_cpu(model_path: str, mode: EmbeddingGenerativeMode) -> bool:
                     model_path, dtype=dtype
                 )
 
-        return model is not None
+        return model is not None, None
+    except HfHubHTTPError as e:
+        if e.response is not None and e.response.status_code >= 500:
+            raise
+        err: str = (
+            f"{type(e).__name__}: {e}\n"
+            f"{''.join(_traceback.format_exc().splitlines(keepends=True)[-6:])}"
+        )
+        print(f"_load_on_cpu exception - {e}")
+        return False, err
     except Exception as e:
-        print(f"_load_embedding_on_cpu exception - {e}")
-        return False
+        err = (
+            f"{type(e).__name__}: {e}\n"
+            f"{''.join(_traceback.format_exc().splitlines(keepends=True)[-6:])}"
+        )
+        print(f"_load_on_cpu exception - {e}")
+        return False, err
     finally:
         _hf_common.DEVICE = _orig_device  # restore
 
@@ -211,9 +241,11 @@ def eval_generative(model_id: str, adapter, random_run: bool = False) -> dict:
             if random_run:
                 load_on_cpu = _temp_random_bool()
             else:
-                load_on_cpu = _load_on_cpu(
+                load_on_cpu, load_error = _load_on_cpu(
                     model_path=model_id, mode=EmbeddingGenerativeMode.GENERATIVE
                 )
+                if load_error and not result["error"]:
+                    result["error"] = load_error
             if load_on_cpu:
                 if random_run:
                     run_smoke_status = _temp_random_bool()
@@ -252,9 +284,11 @@ def eval_embedding(model_id: str, adapter, random_run: bool = False) -> dict:
             if random_run:
                 load_on_cpu = _temp_random_bool()
             else:
-                load_on_cpu = _load_on_cpu(
+                load_on_cpu, load_error = _load_on_cpu(
                     model_path=model_id, mode=EmbeddingGenerativeMode.EMBEDDING
                 )
+                if load_error and not result["error"]:
+                    result["error"] = load_error
 
             if load_on_cpu:
                 if random_run:
@@ -316,7 +350,7 @@ def _process_batch(
 
     _child_entered: float = _t.monotonic()
     print(
-        f"      child[{os.getpid()}] entered _process_batch with {len(batch)} model(s)",
+        f"{_ts()}       child[{os.getpid()}] entered _process_batch with {len(batch)} model(s)",
         flush=True,
     )
 
@@ -375,25 +409,32 @@ def _process_batch(
             if not rec["verified_on_cpu"] and rec["failure_category"] is None:
                 rec["failure_category"] = FAILURE_CATEGORY_CPU_LOAD_FAILED
         except Exception as e:
-            rec["error"] = (
-                f"{type(e).__name__}: {e}\n"
-                f"{''.join(_traceback.format_exc().splitlines(keepends=True)[-6:])}"
-            )
+            # Skip the error/traceback for shallow failure categories where the
+            # failure_category itself is fully self-describing.
+            if rec["failure_category"] not in (
+                FAILURE_CATEGORY_NOT_IMPLEMENTED_ADAPTER,
+                FAILURE_CATEGORY_MODEL_TOO_LARGE,
+            ):
+                rec["error"] = (
+                    f"{type(e).__name__}: {e}\n"
+                    f"{''.join(_traceback.format_exc().splitlines(keepends=True)[-6:])}"
+                )
             if rec["failure_category"] is None:
                 rec["failure_category"] = FAILURE_CATEGORY_TEST_EXECUTION_EXCEPTION
         results.append(rec)
         print(
-            f"      child[{os.getpid()}] finished model "
+            f"{_ts()}       child[{os.getpid()}] finished model "
             f"{len(results)}/{len(batch)}: {model_path!r}  "
             f"(verified_on_cpu={rec['verified_on_cpu']}, "
             f"verified_on_spyre={rec['verified_on_spyre']}, "
+            f"failure_category={rec['failure_category']}, "
             f"error={rec['error']})",
             flush=True,
         )
 
     result_queue.put(results)
     print(
-        f"      child[{os.getpid()}] done in "
+        f"{_ts()}       child[{os.getpid()}] done in "
         f"{_t.monotonic() - _child_entered:.2f}s ({len(results)} results)",
         flush=True,
     )
@@ -533,13 +574,13 @@ def main(argv: list[str] | None = None) -> None:
     # batching. That keeps batch sizes uniform relative to real work.
     prefiltered: list[dict] = []
     early_skipped: int = 0
-    print(f"Will process {len(to_process_list)} models in total.")
+    print(f"{_ts()} Will process {len(to_process_list)} models in total.")
     for row in to_process_list:
         model_path: str = str(row["model_id"])
         if not sink.should_insert_row(model_path):
             early_skipped += 1
             print(
-                f"    sink: '{model_path}' skipped early — "
+                f"{_ts()}     sink: '{model_path}' skipped early — "
                 f"recent snapshot exists within the "
                 f"{sink.__class__.__name__} skip window"
             )
@@ -547,7 +588,7 @@ def main(argv: list[str] | None = None) -> None:
         prefiltered.append(row)
     if early_skipped:
         print(
-            f"\nEarly-skip: {early_skipped}/{total} models already have a "
+            f"\n{_ts()} Early-skip: {early_skipped}/{total} models already have a "
             f"recent snapshot; {len(prefiltered)} left to evaluate.\n"
         )
 
@@ -568,11 +609,11 @@ def main(argv: list[str] | None = None) -> None:
             batch_start = time.monotonic()
             batch_paths = [str(r["model_id"]) for r in batch]
             print(
-                f"\n[batch {batch_idx}/{total_batches}] {len(batch)} model(s) "
+                f"\n{_ts()} [batch {batch_idx}/{total_batches}] {len(batch)} model(s) "
                 f"(overall elapsed: {batch_start - overall_start:.0f}s)"
             )
             for path in batch_paths:
-                print(f"    - {path}")
+                print(f"{_ts()}     - {path}")
 
             # Track which weights existed BEFORE this batch ran, so we can
             # decide per-model whether to delete after.
@@ -599,7 +640,7 @@ def main(argv: list[str] | None = None) -> None:
             # returns instantly, and an empty one signals a crash.
             if result_queue.empty():
                 print(
-                    f"    batch: worker exited code {proc.exitcode} "
+                    f"{_ts()}     batch: worker exited code {proc.exitcode} "
                     f"and returned no results — marking all {len(batch)} "
                     f"models as failed"
                 )
@@ -631,7 +672,7 @@ def main(argv: list[str] | None = None) -> None:
                 processed += 1
 
                 if rec.get("error"):
-                    print(f"    [{model_path}] error: {rec['error']}")
+                    print(f"{_ts()}     [{model_path}] error: {rec['error']}")
 
                 # Coerce added_date from ISO string (as the worker wrote it)
                 # to a date object for the sink.
@@ -642,7 +683,6 @@ def main(argv: list[str] | None = None) -> None:
                     except ValueError:
                         rec["added_date"] = None
 
-                # Sink writes: don't store the `error` field.
                 if sink.add_entry(
                     model_name=str(rec["model_name"]),
                     config_class=str(rec["config_class"]),
@@ -661,14 +701,17 @@ def main(argv: list[str] | None = None) -> None:
                         if rec.get("failure_category") is None
                         else str(rec["failure_category"])
                     ),
+                    error=(None if rec.get("error") is None else str(rec["error"])),
                 ):
                     print(
-                        f"    sink: row written for '{model_path}' "
+                        f"{_ts()}     sink: row written for '{model_path}' "
                         f"(verified_on_cpu={rec.get('verified_on_cpu')}, "
                         f"verified_on_spyre={rec.get('verified_on_spyre')})"
                     )
                 else:
-                    print(f"    sink: row skipped for '{model_path}' (guard rejected)")
+                    print(
+                        f"{_ts()}     sink: row skipped for '{model_path}' (guard rejected)"
+                    )
 
             # Cache cleanup: delete weights downloaded during this batch,
             # regardless of whether the worker processed each model.
@@ -678,30 +721,37 @@ def main(argv: list[str] | None = None) -> None:
 
             batch_elapsed = time.monotonic() - batch_start
             print(
-                f"    batch {batch_idx}/{total_batches} done: "
+                f"{_ts()}     batch {batch_idx}/{total_batches} done: "
                 f"{len(worker_results)} model(s) in {batch_elapsed:.1f}s  "
                 f"(per-model avg: {batch_elapsed / max(1, len(worker_results)):.1f}s)"
             )
+
+            # Durability boundary: flush accumulated rows now so a hard parent
+            # crash before the next batch loses at most this batch, not the
+            # whole run. No-op for sinks that write per-row (CSV).
+            sink.flush()
     except KeyboardInterrupt:
-        print("\nInterrupted — results so far are saved; rerun to resume.")
+        print(f"\n{_ts()} Interrupted — results so far are saved; rerun to resume.")
     finally:
         # Clean up weights for the in-flight batch if interrupted mid-run.
         _ = _cleanup_batch_weights(batch_paths, had_weights_map, total_freed)
 
         sink.close()
         if args.write_to_csv:
-            print(f"\nCSV: '{args.write_to_csv}' closed ({processed} rows processed).")
+            print(
+                f"\n{_ts()} CSV: '{args.write_to_csv}' closed ({processed} rows processed)."
+            )
 
         overall_elapsed = time.monotonic() - overall_start
         mins, secs = divmod(int(overall_elapsed), 60)
         print(
             f"\n{'='*60}\n"
-            f"Processed {processed}/{total} models  |  "
+            f"{_ts()} Processed {processed}/{total} models  |  "
             f"Total time: {mins}m {secs:02d}s\n"
             f"{'='*60}"
         )
 
 
 if __name__ == "__main__":
-    print("Starting weekly generation...", flush=True)
+    print(f"{_ts()} Starting weekly generation...", flush=True)
     main()
