@@ -62,13 +62,30 @@ on:
         default: ''
       test_type:
         description: >-
-          Suite subset to run: smoke | core | full | suite_<group> | <label>.
-          Selects configs whose test_suite_config.labels array contains this
-          value, or (for suite_<group>) whose path sits under that directory.
-          Default: full (every config).
+          Which Spyre suites to run. Three coarse tiers cover the common
+          cross-repo case (a caller like Jenkins that treats this workflow as
+          a blackbox): "smoke" runs only the smoke suite; "core" runs every
+          other suite (load, token_compare, embed_compare, vlm,
+          model_module); "full" (default) runs everything, i.e. smoke + core.
+          For finer control, any other value is a space-separated allowlist
+          of individual suite keys matched against each matrix job's own
+          `if:` (see the "Suite key" comment above each spyre-*-tests job
+          below), e.g. "smoke token_compare". Adding a new suite later means
+          giving the new job its own key and adding it to the "core" set --
+          no other job needs to change.
         required: false
         type: string
         default: full
+      models:
+        description: >-
+          Space-separated list of model paths to restrict every matrix job
+          (smoke/load/token-compare/embed-compare/vision) to, e.g.
+          "Qwen/Qwen3-0.6B ministral/Ministral-3B-Instruct". Must match paths
+          exactly as they appear in tests/model_registry.py. Empty (default)
+          = run every model in the registry.
+        required: false
+        type: string
+        default: ''
 
 defaults:
   run:
@@ -157,6 +174,10 @@ jobs:
 
       - name: Generate matrices
         id: generate
+        env:
+          # Piped through env (not interpolated directly into the script) since
+          # this is caller-supplied workflow_call input.
+          ONLY_MODELS: ${{ inputs.models }}
         run: |
           # Manually exclude models here by adding them to --exclude
           # Example: python .github/scripts/generate_test_matrix.py --exclude ibm-granite/granite-vision-4.1-4b tiiuae/Falcon3-1B-Base
@@ -164,7 +185,14 @@ jobs:
           # We exclude these models - See https://github.com/torch-spyre/hf-adapters/issues/89
           # google/gemma-4-12B-it: VLM e2e passes on the pod but OOMs the CI runner
           # (see PR #182); validated on-pod, excluded here to match upstream/main.
-          python .github/scripts/generate_test_matrix.py --exclude tiiuae/Falcon3-1B-Base mistralai/Mistral-Small-3.1-24B-Instruct-2503 google/gemma-4-12B-it
+          ONLY_ARGS=()
+          if [[ -n "$ONLY_MODELS" ]]; then
+            read -r -a ONLY_ARGS <<< "$ONLY_MODELS"
+            ONLY_ARGS=(--only "${ONLY_ARGS[@]}")
+          fi
+          python .github/scripts/generate_test_matrix.py \
+            --exclude tiiuae/Falcon3-1B-Base mistralai/Mistral-Small-3.1-24B-Instruct-2503 google/gemma-4-12B-it \
+            "${ONLY_ARGS[@]}"
 
   adapter-coverage:
     name: adapter coverage
@@ -258,6 +286,11 @@ jobs:
   spyre-load-tests:
     name: Spyre load (${{ matrix.model_key }})
     needs: [generate-matrix]
+    # Suite key: "load". Runs on the "full" or "core" coarse tiers (core =
+    # every suite except smoke), or when "load" appears as a space-separated
+    # word in test_type (e.g. "smoke load") for fine-grained selection.
+    # See spyre-smoke-tests for the other keys.
+    if: inputs.test_type == 'full' || inputs.test_type == 'core' || contains(format(' {0} ', inputs.test_type), ' load ')
     runs-on:
       - x86_64
       - spyre_pf_x1
@@ -304,6 +337,11 @@ jobs:
   spyre-smoke-tests:
     name: Spyre smoke (${{ matrix.model_key }})
     needs: [generate-matrix]
+    # Suite key: "smoke", also the coarse "smoke" tier itself (this is the
+    # only job that tier runs). Same allowlist mechanism as spyre-load-tests
+    # above -- to add a new suite later, give the new job its own key and
+    # copy this `if:` line with that key; no existing job needs to change.
+    if: inputs.test_type == 'full' || contains(format(' {0} ', inputs.test_type), ' smoke ')
     runs-on:
       - x86_64
       - spyre_pf_x1
@@ -349,6 +387,8 @@ jobs:
   spyre-token-compare-tests:
     name: Spyre token compare (${{ matrix.model_key }})
     needs: [generate-matrix]
+    # Suite key: "token_compare". Part of the "core" coarse tier.
+    if: inputs.test_type == 'full' || inputs.test_type == 'core' || contains(format(' {0} ', inputs.test_type), ' token_compare ')
     runs-on:
       - x86_64
       - spyre_pf_x1
@@ -394,6 +434,8 @@ jobs:
   spyre-embed-compare-tests:
     name: Spyre embed compare (${{ matrix.model_key }})
     needs: [generate-matrix]
+    # Suite key: "embed_compare". Part of the "core" coarse tier.
+    if: inputs.test_type == 'full' || inputs.test_type == 'core' || contains(format(' {0} ', inputs.test_type), ' embed_compare ')
     runs-on:
       - x86_64
       - spyre_pf_x1
@@ -439,6 +481,8 @@ jobs:
   spyre-vlm-e2e-tests:
     name: Spyre VLM e2e (${{ matrix.model_key }})
     needs: [generate-matrix]
+    # Suite key: "vlm". Part of the "core" coarse tier.
+    if: inputs.test_type == 'full' || inputs.test_type == 'core' || contains(format(' {0} ', inputs.test_type), ' vlm ')
     runs-on:
       - x86_64
       - spyre_pf_x1
@@ -540,6 +584,8 @@ jobs:
 
   spyre-model-module-tests:
     name: Spyre model-module tests (${{ matrix.config }})
+    # Suite key: "model_module". Part of the "core" coarse tier.
+    if: inputs.test_type == 'full' || inputs.test_type == 'core' || contains(format(' {0} ', inputs.test_type), ' model_module ')
     runs-on:
       - x86_64
       - spyre_pf_x1

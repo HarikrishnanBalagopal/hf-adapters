@@ -36,11 +36,20 @@ on:
         default: ''
       test_type:
         description: >-
-          Suite subset to run: smoke | core | full | suite_<group> | <label>.
-          Default: full (every config).
+          Test tier to run: smoke | core | full. "smoke" runs only the smoke
+          suite; "core" runs every other suite (load, token_compare,
+          embed_compare, vlm, model_module); "full" runs everything. This is
+          a plain string underneath (see _test_matrix.yaml), so a caller
+          using the API/gh CLI can also pass an individual suite key or a
+          space-separated combo (e.g. "smoke token_compare") for finer
+          control than the dropdown offers.
         required: false
-        type: string
+        type: choice
         default: full
+        options:
+          - smoke
+          - core
+          - full
 
 concurrency:
   group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && github.event.pull_request.html_url) || (github.event_name == 'workflow_dispatch'
