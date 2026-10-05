@@ -25,19 +25,44 @@ import sys
 from pathlib import Path
 
 import yaml
-from huggingface_hub import snapshot_download
+from huggingface_hub import hf_hub_download, snapshot_download
 
 MODEL_REGISTRY_PATH = (
     Path(__file__).resolve().parents[2] / "tests" / "model_registry.py"
 )
+VISION_HELPERS_PATH = (
+    Path(__file__).resolve().parents[2] / "tests" / "_vision_helpers.py"
+)
 # Matches every `"path": "org/repo"` entry across the registry's model dicts.
 _PATH_ENTRY_RE = re.compile(r'"path":\s*"([^"]+)"')
+# Matches each dict literal that carries `"repo_type": "dataset"`, so the sample
+# images the vision tests download are derived from the tests themselves.
+_DATASET_DICT_RE = re.compile(r'\{[^{}]*?"repo_type":\s*"dataset"[^{}]*?\}', re.S)
+_REPO_ID_RE = re.compile(r'"repo_id":\s*"([^"]+)"')
+_FILENAME_RE = re.compile(r'"filename":\s*"([^"]+)"')
 
 
 def _registry_model_paths() -> list[str]:
     """Every HF repo referenced by tests/model_registry.py, so the cache can't drift from what CI actually tests."""
     text = MODEL_REGISTRY_PATH.read_text(encoding="utf-8")
     return sorted(set(_PATH_ENTRY_RE.findall(text)))
+
+
+def _dataset_files() -> list[tuple[str, str]]:
+    """Every (repo_id, filename) the vision tests fetch from a dataset repo.
+
+    These are not models, so snapshot_download's model-only default never
+    cached them. With HF_HUB_OFFLINE=1 on the test runs, an uncached one is a
+    hard failure rather than a download, so warm them here.
+    """
+    text = VISION_HELPERS_PATH.read_text(encoding="utf-8")
+    pairs = set()
+    for block in _DATASET_DICT_RE.findall(text):
+        repo_id = _REPO_ID_RE.search(block)
+        filename = _FILENAME_RE.search(block)
+        if repo_id and filename:
+            pairs.add((repo_id.group(1), filename.group(1)))
+    return sorted(pairs)
 
 
 def main():
@@ -78,10 +103,26 @@ def main():
         except Exception as e:
             print(f"❌ Failed to download {repo_id}: {e}")
             failed_models.append(repo_id)
+    dataset_files = _dataset_files()
+    print(f"\n📋 Found {len(dataset_files)} dataset file(s) to cache:", dataset_files)
+    for repo_id, filename in dataset_files:
+        print(f"\n🚀 Processing dataset file: {repo_id}/{filename}...")
+        try:
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                repo_type="dataset",
+                token=token,
+                force_download=force,
+            )
+            print(f"✅ Success: {repo_id}/{filename} cache verified!")
+        except Exception as e:
+            print(f"❌ Failed to download {repo_id}/{filename}: {e}")
+            failed_models.append(f"{repo_id}/{filename}")
     if failed_models:
-        print(f"\n❌ Pipeline completed with errors. Failed models: {failed_models}")
+        print(f"\n❌ Pipeline completed with errors. Failed: {failed_models}")
         sys.exit(1)
-    print("\n🎉 All models successfully processed and cached!")
+    print("\n🎉 All models and dataset files successfully processed and cached!")
 
 
 if __name__ == "__main__":
