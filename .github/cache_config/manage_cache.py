@@ -85,8 +85,11 @@ def main():
             sys.exit(1)
     models = sorted(set(_registry_model_paths()) | set(extra_models))
     if not models:
+        # Warn and carry on rather than exit: the dataset files below are a
+        # separate source and still need warming, and an empty model list is
+        # itself a symptom (a registry parse that found nothing) rather than a
+        # reason to skip the rest of the job.
         print(f"⚠️ Warning: No models found in the registry or {config_file}.")
-        sys.exit(0)
     print(f"📋 Found {len(models)} model(s) to cache:", models)
     failed_models = []
     for repo_id in models:
@@ -103,7 +106,12 @@ def main():
         except Exception as e:
             print(f"❌ Failed to download {repo_id}: {e}")
             failed_models.append(repo_id)
+    # Tallied separately from failed_models: a model that is gated or renamed
+    # upstream fails every night, and lumping these together would let that
+    # standing noise hide a missing sample image, which fails the vision tests
+    # outright under HF_HUB_OFFLINE=1.
     dataset_files = _dataset_files()
+    failed_datasets = []
     print(f"\n📋 Found {len(dataset_files)} dataset file(s) to cache:", dataset_files)
     for repo_id, filename in dataset_files:
         print(f"\n🚀 Processing dataset file: {repo_id}/{filename}...")
@@ -118,9 +126,12 @@ def main():
             print(f"✅ Success: {repo_id}/{filename} cache verified!")
         except Exception as e:
             print(f"❌ Failed to download {repo_id}/{filename}: {e}")
-            failed_models.append(f"{repo_id}/{filename}")
+            failed_datasets.append(f"{repo_id}/{filename}")
     if failed_models:
-        print(f"\n❌ Pipeline completed with errors. Failed: {failed_models}")
+        print(f"\n⚠️ Models that failed to cache: {failed_models}")
+    if failed_datasets:
+        print(f"\n❌ Dataset files that failed to cache: {failed_datasets}")
+    if failed_models or failed_datasets:
         sys.exit(1)
     print("\n🎉 All models and dataset files successfully processed and cached!")
 
