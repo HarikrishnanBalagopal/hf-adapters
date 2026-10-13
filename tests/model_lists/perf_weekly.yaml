@@ -1,0 +1,10 @@
+# Models benchmarked by TEST_TYPE=perf_weekly (one GHA matrix leg each); must be
+# causal-LM paths in tests/model_registry.py. Every caller (GHA, Jenkins, local
+# dev) picks this up automatically -- update here only, nowhere else.
+# Same three models as perf_nightly.yaml today. This file exists so the weekly tier can
+# carry a longer, less frequent list (the "even longer list" in the enabling-multiple-models
+# thread) without touching nightly; until such a list is agreed the two are identical.
+models:
+  - ibm-granite/granite-4.1-8b
+  - mistralai/Ministral-3-14B-Instruct-2512
+  - google/gemma-4-26B-A4B-it

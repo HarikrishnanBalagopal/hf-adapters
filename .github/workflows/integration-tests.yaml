@@ -93,6 +93,13 @@ on:
           value a real caller sends (like the "unit"/"trunk" tiers above)
           must be listed explicitly below.
           "perf" runs spyre-perf-suite once per model in tests/model_lists/perf.yaml, one matrix leg each.
+          "perf_nightly" / "perf_weekly" are the same model benchmarks over
+          tests/model_lists/perf_nightly.yaml / perf_weekly.yaml, so a scheduled tier
+          picks its own model set.
+          These names use underscores because resolve-models below only accepts a
+          [a-z_]+ test_type; a hyphenated name is silently resolved to an EMPTY model
+          list, which for perf means zero matrix legs and a green run that measured
+          nothing.
         required: false
         type: choice
         default: integration
@@ -102,6 +109,8 @@ on:
           - regression
           - trunk
           - perf
+          - perf_nightly
+          - perf_weekly
       run_id:
         description: >-
           UUID for this TEST RUN, minted by the dispatching orchestrator above the CI split.

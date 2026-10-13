@@ -70,7 +70,9 @@ on:
           token_classification_compare, model_module);
           "integration" runs token_compare and model_components;
           "regression"/"trunk" (default: regression) run the
-          standard Spyre suite set. "perf" runs only spyre-perf-tests, over the `models` list.
+          standard Spyre suite set. "perf" runs only spyre-perf-tests, over the `models` list;
+          "perf_nightly"/"perf_weekly" run that same job over their own
+          tests/model_lists/<tier>.yaml instead.
           The tests/spyre/edge_cases/ suite is opted
           into separately via the edge_cases_only boolean input below -- it
           is deliberately outside this shared test_type contract so callers
@@ -1912,12 +1914,14 @@ jobs:
           job_key: edge_cases
           payload: '{"model_key": ${{ toJSON(matrix.model_key) }}, "test_file": ${{ toJSON(matrix.test_file) }}}'
 
-  # test_type=perf only: one spyre-perf-suite leg per tests/model_lists/perf.yaml model, ingested inline (never uploaded).
+  # The MODEL half: one spyre-perf-suite leg per model, ingested inline (never uploaded).
+  # The model list comes from tests/model_lists/<test_type>.yaml, so perf_nightly and
+  # perf_weekly run this same job over their own (shorter/fuller) lists.
   spyre-perf-tests:
     name: Spyre perf (${{ matrix.model_key }})
     needs: [generate-matrix, resolve-test-type, resolve-torch-spyre, artifact-identity]
     # Plain equality, not the contains(' <key> ') suite-key form: tests/test_tier_tags.py requires that form to name a tier.
-    if: ${{ always() && (needs.resolve-torch-spyre.result == 'success' || needs.resolve-torch-spyre.result == 'skipped') && !inputs.skip_tests && !inputs.edge_cases_only && needs.resolve-test-type.outputs.test_type == 'perf' && needs.generate-matrix.outputs.perf_matrix != '[]' }}
+    if: ${{ always() && (needs.resolve-torch-spyre.result == 'success' || needs.resolve-torch-spyre.result == 'skipped') && !inputs.skip_tests && !inputs.edge_cases_only && (needs.resolve-test-type.outputs.test_type == 'perf' || needs.resolve-test-type.outputs.test_type == 'perf_nightly' || needs.resolve-test-type.outputs.test_type == 'perf_weekly') && needs.generate-matrix.outputs.perf_matrix != '[]' }}
     runs-on:
       - x86_64
       - spyre_pf_x1

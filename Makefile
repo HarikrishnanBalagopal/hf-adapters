@@ -17,6 +17,15 @@ SHELL := /bin/bash
 #                 and the op suite is not run twice. Models live here because
 #                 they need hf-adapters' exact transformers pin, which only this
 #                 image carries. -dev only: -minimal has no perf wheel.
+#   perf_nightly / perf_weekly
+#               — the same MODEL benchmarks as `perf`, but each tier reads its own
+#                 tests/model_lists/<tier>.yaml, so a tier's model set can change
+#                 without touching this file or a workflow. Both currently hold the
+#                 same three models; weekly is the place a longer, less frequent list
+#                 goes when one is agreed. Underscores, not hyphens: the GHA
+#                 resolve-models step only accepts a [a-z_]+ test_type, and a
+#                 rejected name silently yields an EMPTY model list (so for perf:
+#                 zero matrix legs, and a green run that measured nothing).
 # Also accepts a space-separated list of individual suite keys (matches
 # _test_matrix.yaml's `test_type` semantics), e.g. TEST_TYPE="smoke load".
 # Empty / unset defaults to "regression" (every suite).
@@ -254,7 +263,7 @@ tests: ## Run the suites selected by TEST_TYPE into RESULTS_DIR (JUnit per suite
 	  *" regression "*|*" trunk "*) suites="adapter_coverage smoke load token_compare model_components embed_compare vlm reranker_compare masked_lm_compare question_answering_compare seq_classification_compare token_classification_compare model_module" ;; \
 	  *" unit "*) suites="adapter_coverage load token_compare embed_compare vlm reranker_compare masked_lm_compare question_answering_compare seq_classification_compare token_classification_compare model_module" ;; \
 	  " integration ") suites="token_compare" ;; \
-	  " perf ") suites="perf" ;; \
+	  " perf "|" perf_nightly "|" perf_weekly ") suites="perf" ;; \
 	  " token_compare ") echo "TEST_TYPE=token_compare is not a valid tier -- use TEST_TYPE=integration to run integration coverage, or include 'token_compare' in a multi-suite combo (e.g. TEST_TYPE=\"token_compare load\")."; exit 1 ;; \
 	  *) suites="$$resolved" ;; \
 	esac; \
