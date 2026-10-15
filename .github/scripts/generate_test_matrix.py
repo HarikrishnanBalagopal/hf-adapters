@@ -212,7 +212,7 @@ def main():
         "--strict-perf",
         action="store_true",
         help="Fail instead of dropping non-causal paths from the perf matrix "
-        "(set by the workflow when test_type is a perf tier)",
+        "(set by the workflow when test_type is perf)",
     )
 
     args = parser.parse_args()
