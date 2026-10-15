@@ -11,8 +11,10 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.model_registry import (
+    ALL_CAUSAL_PATHS,
     CAUSAL_PATHS,
     EMBED_PATHS,
     MASKED_LM_PATHS,
@@ -97,3 +99,41 @@ def test_no_only_models_leaves_perf_empty_without_raising() -> None:
     """A registry-wide run (no --only) has no perf legs by design and must not fail."""
     matrices = generate_test_matrix.generate_matrices(strict_perf=True)
     assert matrices["perf"] == []
+
+
+def test_every_perf_list_file_is_benchmarkable() -> None:
+    """Every model in a committed perf list must be one perf can actually measure.
+
+    This is the test-time counterpart of the workflow's --strict-perf: it catches a
+    non-causal entry when the list changes, rather than at dispatch. Reads whatever perf
+    lists exist, and handles both the flat `models:` shape and the nested
+    `daily:`/`weekly:` sections, so it keeps working as the file's shape evolves.
+    """
+    list_dir = Path(__file__).resolve().parent / "model_lists"
+    perf_lists = sorted(list_dir.glob("perf*.yaml"))
+    assert perf_lists, f"no perf list files found in {list_dir}"
+
+    # ALL_CAUSAL_PATHS, not CAUSAL_PATHS: a perf list names specific large checkpoints
+    # (granite-4.1-8b, Ministral-3-14B) that are registered causal-LMs but are not their
+    # adapter's smallest representative. This is the set --only resolves against.
+    causal = set(ALL_CAUSAL_PATHS)
+    offenders: dict[str, list[str]] = {}
+    for path in perf_lists:
+        with open(path) as handle:
+            data = yaml.safe_load(handle)
+        assert isinstance(data, dict), f"{path.name} did not parse to a mapping"
+        # Flat `models:`, or one list per schedule section (daily:/weekly:/...).
+        sections = {"": data} if isinstance(data.get("models"), list) else data
+        for key, section in sections.items():
+            if not isinstance(section, dict) or not isinstance(
+                section.get("models"), list
+            ):
+                continue
+            bad = sorted({str(m) for m in section["models"]} - causal)
+            if bad:
+                offenders[f"{path.name}:{key or 'models'}"] = bad
+
+    assert not offenders, (
+        "perf benchmarks prefill+decode, so every entry must be a causal-LM path in "
+        f"tests/model_registry.py; these are not: {offenders}"
+    )
