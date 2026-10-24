@@ -138,4 +138,16 @@ test = [
     "pytest>=9.0,<9.1",
     "Pillow",
     "torchvision~=0.28.0",
+    # pandas is pulled in transitively by `datasets` (imported by evals/{gsm8k,mmlu}) and is
+    # imported directly by tests/spyre/weekly_generation/snapshot_model_counts.py. It publishes
+    # no s390x wheel (0 of ~2200 on PyPI), so s390x always builds the sdist -- and 3.1.0 added an
+    # xsimd SIMD layer whose `scalar` fallback still includes the xsimd-dependent header. With no
+    # xsimd arch backend enabled there (XSIMD_WITH_VXE off, so xsimd.hpp takes its
+    # XSIMD_NO_SUPPORTED_ARCHITECTURE branch and never includes xsimd_api.hpp) that header fails
+    # to compile: "'load_unaligned'/'reduce_add'/'broadcast' is not a member of 'xsimd'".
+    # Upstream: xtensor-stack/xsimd#954 (open since 2023). Cap only the arch that builds from
+    # source. `datasets` itself is deliberately NOT declared here: it would drag pyarrow into
+    # this lock, and ppc64le needs pyarrow<23 (IBM devpi's 23.0.x link the numpy 1.x ABI), which
+    # the image build already handles out-of-band.
+    "pandas<3.1.0; platform_machine == 's390x'",
 ]
