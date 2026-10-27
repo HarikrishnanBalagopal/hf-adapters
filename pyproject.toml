@@ -12,6 +12,13 @@ dependencies = [
     "sentencepiece",
     "accelerate",
     "sentence_transformers",
+    # s390x only: pandas arrives transitively via `datasets` (imported by evals/{gsm8k,mmlu}
+    # and tests/spyre/weekly_generation/snapshot_model_counts.py). It publishes no s390x wheel
+    # at any 3.x, so Z builds the sdist -- and 3.1.0's scalar SIMD fallback TU still compiles
+    # xsimd batch code that its vendored xsimd disables there: xtensor-stack/xsimd#954.
+    # Declared here, not pinned in a CI Containerfile, so the image build reads the spec off
+    # this wheel's own Requires-Dist (the same way it already reads `transformers`).
+    "pandas<3.1.0; platform_machine == 's390x'",
 ]
 
 [build-system]
