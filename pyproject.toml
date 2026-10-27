@@ -16,6 +16,10 @@ dependencies = [
     # hf_adapters/serve.py imports numpy directly. It has been arriving transitively (via
     # transformers, accelerate and others), which is not a contract -- declare what we import.
     "numpy",
+    # tests/spyre/weekly_generation/snapshot_model_counts.py imports pandas. Here, not in the
+    # `test` group: PEP 735 groups never reach Requires-Dist, which the image reads it from.
+    # Capped because 3.1.0's sdist does not build on s390x (xtensor-stack/xsimd#954).
+    "pandas<3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -148,8 +152,6 @@ test = [
     "Pillow",
     "torchvision~=0.28.0",
     "PyYAML",
-    # tests/spyre/weekly_generation/snapshot_model_counts.py imports pandas directly.
-    "pandas",
 ]
 # evals/{gsm8k,mmlu} import `datasets`. Kept in its own group rather than
 # [project].dependencies: declaring it there pulls pyarrow into the resolution for every

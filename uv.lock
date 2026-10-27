@@ -1114,6 +1114,7 @@ dependencies = [
     { name = "mistral-common" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+    { name = "pandas" },
     { name = "sentence-transformers" },
     { name = "sentencepiece" },
     { name = "torch", version = "2.13.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
@@ -1152,7 +1153,6 @@ spyre = [
     { name = "torch-spyre" },
 ]
 test = [
-    { name = "pandas" },
     { name = "pillow" },
     { name = "pytest" },
     { name = "pyyaml" },
@@ -1166,6 +1166,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.31.0" },
     { name = "mistral-common", specifier = "==1.11.7" },
     { name = "numpy" },
+    { name = "pandas", specifier = "<3.1.0" },
     { name = "sentence-transformers" },
     { name = "sentencepiece" },
     { name = "torch", specifier = ">=2.0" },
@@ -1194,7 +1195,6 @@ models-ops = [
 oot = [{ name = "oot-framework", git = "https://github.com/torch-spyre/torch-spyre?subdirectory=tests%2Foot_framework&rev=main" }]
 spyre = [{ name = "torch-spyre", git = "https://github.com/torch-spyre/torch-spyre?rev=main" }]
 test = [
-    { name = "pandas" },
     { name = "pillow" },
     { name = "pytest", specifier = ">=9.0,<9.1" },
     { name = "pyyaml" },
