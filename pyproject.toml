@@ -13,7 +13,17 @@ dependencies = [
     "accelerate",
     "sentence_transformers",
     "huggingface_hub>=1.31.0",
+    # hf_adapters/serve.py imports numpy directly. It has been arriving transitively (via
+    # transformers, accelerate and others), which is not a contract -- declare what we import.
+    "numpy",
 ]
+
+[project.optional-dependencies]
+# The YOLO endpoint is opt-in: hf_adapters/serve.py documents that it "needs
+# hf_adapters.ultralytics_yolo, which not every build ships", and imports ultralytics lazily
+# inside YOLO.detect(). Declared as an extra so the import is honest without making every
+# install pull it.
+yolo = ["ultralytics"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs", "setuptools_scm>=10"]
@@ -138,4 +148,13 @@ test = [
     "Pillow",
     "torchvision~=0.28.0",
     "PyYAML",
+    # tests/spyre/weekly_generation/snapshot_model_counts.py imports pandas directly.
+    "pandas",
+]
+# evals/{gsm8k,mmlu} import `datasets`. Kept in its own group rather than
+# [project].dependencies: declaring it there pulls pyarrow into the resolution for every
+# install, and the latest pyarrow publishes no ppc64le or s390x wheel (the image installs a
+# from-source pin on Z and caps <23 on Power, whose devpi 23.0.x link the numpy 1.x ABI).
+evals = [
+    "datasets",
 ]
